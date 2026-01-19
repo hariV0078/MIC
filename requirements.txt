@@ -1,0 +1,37 @@
+# PDF processing
+PyPDF2>=3.0.0
+pdfplumber>=0.10.0
+
+# Image processing
+Pillow>=10.0.0
+imagehash>=4.3.1
+
+# Google Gemini AI (primary)
+google-genai>=0.2.0
+
+# Groq Cloud AI (fallback)
+groq>=0.4.0
+
+# FastAPI and web server
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+python-multipart>=0.0.6
+
+# Data processing
+pandas>=2.0.0
+openpyxl>=3.1.0
+
+# HTTP requests for downloading files
+requests>=2.31.0
+
+# Environment variables
+python-dotenv>=1.0.0
+
+# Optional: OCR support (uncomment if needed)
+# pdf2image>=1.16.0
+# pytesseract>=0.3.10
+
+# Development dependencies (optional)
+# pytest>=7.4.0
+# pytest-cov>=4.1.0
+
