@@ -3,6 +3,7 @@ import logging
 import io
 import os
 import time
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Optional, List, Dict, Any
@@ -15,8 +16,15 @@ from dotenv import load_dotenv
 from event_validator.utils.logging_config import setup_logging
 from event_validator.types import ValidationConfig
 from event_validator.orchestration.runner import process_submission
-from event_validator.validators.gemini_client import GeminiClient
+from event_validator.validators.gemini_client import GeminiClient, set_rate_limit_callback
 from event_validator.validators.duplicate_validator import reset_batch_hash_tracker
+from event_validator.utils.downloader import (
+    start_periodic_cleanup,
+    stop_periodic_cleanup,
+    cleanup_old_files,
+    cleanup_all_files,
+    FILE_MAX_AGE
+)
 
 # Load environment variables from .env file
 load_dotenv()
@@ -42,6 +50,46 @@ app.add_middleware(
 # Global configuration (can be set via environment variables)
 _config: Optional[ValidationConfig] = None
 _gemini_client: Optional[GeminiClient] = None
+
+# Rate limiting: Semaphore to limit concurrent API calls
+# Default: 2 concurrent API calls to avoid hitting rate limits
+MAX_CONCURRENT_API_CALLS = int(os.getenv('MAX_CONCURRENT_API_CALLS', '2'))
+_api_semaphore = threading.Semaphore(MAX_CONCURRENT_API_CALLS)
+
+# Default max workers for parallel processing (reduced to avoid rate limits)
+DEFAULT_MAX_WORKERS = int(os.getenv('DEFAULT_MAX_WORKERS', '2'))
+
+# Rate limit detection: Track if we're in rate limit mode (sequential processing)
+_rate_limit_detected = threading.Event()
+# Delay between API calls when in sequential mode (5 seconds for Gemini free tier: 15 RPM)
+API_CALL_DELAY = float(os.getenv('API_CALL_DELAY', '5.0'))  # seconds
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize services on application startup."""
+    logger.info("Application startup: Initializing services...")
+    
+    # Start periodic cleanup of downloaded files
+    start_periodic_cleanup()
+    
+    # Perform initial cleanup of old files
+    deleted = cleanup_old_files()
+    if deleted > 0:
+        logger.info(f"Startup cleanup: Deleted {deleted} old file(s)")
+    
+    logger.info("Application startup complete")
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Cleanup services on application shutdown."""
+    logger.info("Application shutdown: Stopping services...")
+    
+    # Stop periodic cleanup thread
+    stop_periodic_cleanup()
+    
+    logger.info("Application shutdown complete")
 
 
 def get_config() -> ValidationConfig:
@@ -71,6 +119,14 @@ def get_gemini_client() -> GeminiClient:
         # Get Groq API key for fallback
         groq_api_key = os.getenv('GROQ_API_KEY') or os.getenv('GROQ_CLOUD_API')
         _gemini_client = GeminiClient(api_key=gemini_api_key, groq_api_key=groq_api_key)
+        
+        # Set callback to detect rate limits
+        def on_rate_limit_detected():
+            """Callback when rate limit is detected in Gemini client."""
+            logger.warning("Rate limit detected in Gemini client - switching to sequential mode")
+            _rate_limit_detected.set()
+        
+        set_rate_limit_callback(on_rate_limit_detected)
     return _gemini_client
 
 
@@ -131,13 +187,60 @@ async def health_check():
     config = get_config()
     gemini_client = get_gemini_client()
     
+    # Check downloaded files directory size
+    from event_validator.utils.downloader import DOWNLOAD_DIR
+    downloaded_files_count = 0
+    downloaded_files_size = 0
+    if DOWNLOAD_DIR.exists():
+        downloaded_files_count = len(list(DOWNLOAD_DIR.glob("*")))
+        downloaded_files_size = sum(f.stat().st_size for f in DOWNLOAD_DIR.glob("*") if f.is_file())
+    
     return {
         "status": "healthy",
         "gemini_configured": gemini_client.client is not None,
         "groq_fallback_configured": gemini_client.groq_client is not None and gemini_client.groq_client.client is not None,
         "base_image_path": str(config.base_image_path) if config.base_image_path else None,
-        "acceptance_threshold": config.acceptance_threshold
+        "acceptance_threshold": config.acceptance_threshold,
+        "downloaded_files": {
+            "count": downloaded_files_count,
+            "size_mb": round(downloaded_files_size / (1024 * 1024), 2)
+        }
     }
+
+
+@app.post("/admin/cleanup")
+async def manual_cleanup(
+    max_age_hours: Optional[int] = Query(None, description="Delete files older than this many hours. If not specified, uses default FILE_MAX_AGE."),
+    delete_all: bool = Query(False, description="If true, delete all files regardless of age")
+):
+    """
+    Manually trigger cleanup of downloaded files.
+    
+    - **max_age_hours**: Delete files older than this many hours
+    - **delete_all**: If true, delete all files regardless of age
+    """
+    try:
+        if delete_all:
+            deleted = cleanup_all_files()
+            return {
+                "status": "success",
+                "action": "delete_all",
+                "files_deleted": deleted,
+                "message": f"Deleted {deleted} file(s)"
+            }
+        else:
+            max_age_seconds = max_age_hours * 3600 if max_age_hours else None
+            deleted = cleanup_old_files(max_age_seconds)
+            return {
+                "status": "success",
+                "action": "cleanup_old",
+                "files_deleted": deleted,
+                "max_age_hours": max_age_hours or (FILE_MAX_AGE / 3600),
+                "message": f"Deleted {deleted} old file(s)"
+            }
+    except Exception as e:
+        logger.error(f"Manual cleanup failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Cleanup failed: {str(e)}")
 
 
 @app.post("/validate/upload")
@@ -188,58 +291,109 @@ async def validate_upload(
         # Reset batch hash tracker at start of new batch
         reset_batch_hash_tracker()
         
-        # Process submissions in parallel for better performance
-        max_workers = min(10, len(rows))  # Limit to 10 parallel workers or number of rows, whichever is smaller
-        results = []
+        # Check if rate limit was detected - if so, use sequential processing
+        use_sequential = _rate_limit_detected.is_set()
         
-        def process_single_submission(row_data: dict, row_index: int) -> tuple[int, dict]:
-            """Process a single submission and return index and result."""
-            try:
-                logger.info(f"Processing submission {row_index + 1}/{len(rows)}")
-                submission = process_submission(row_data, config, gemini_client)
-                
-                # Create result row (use original row data if available)
-                result_row = getattr(submission, '_original_row_data', row_data).copy()
-                result_row['Overall Score'] = submission.overall_score
-                result_row['Status'] = submission.status
-                result_row['Requirements Not Met'] = submission.requirements_not_met
-                
-                return row_index, result_row
-            except Exception as e:
-                logger.error(f"Error processing submission {row_index + 1}: {e}", exc_info=True)
-                # Add error row
-                result_row = row_data.copy()
-                result_row['Overall Score'] = 0
-                result_row['Status'] = "Error"
-                result_row['Requirements Not Met'] = f"Processing error: {str(e)}"
-                return row_index, result_row
-        
-        # Process submissions in parallel using ThreadPoolExecutor
-        logger.info(f"Processing {len(rows)} submissions with {max_workers} parallel workers...")
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            # Submit all tasks
-            future_to_index = {
-                executor.submit(process_single_submission, row, i): i
-                for i, row in enumerate(rows)
-            }
+        if use_sequential:
+            logger.warning("Rate limit detected - switching to sequential processing mode")
+            logger.info(f"Processing {len(rows)} submissions sequentially with {API_CALL_DELAY}s delay between API calls...")
+            results = []
             
-            # Collect results as they complete (maintain order by storing with index)
-            indexed_results = {}
-            for future in as_completed(future_to_index):
+            for i, row in enumerate(rows):
                 try:
-                    row_index, result_row = future.result()
-                    indexed_results[row_index] = result_row
+                    logger.info(f"Processing submission {i + 1}/{len(rows)} (sequential mode)")
+                    # Add delay between submissions to respect rate limits
+                    if i > 0:
+                        logger.debug(f"Waiting {API_CALL_DELAY}s before next submission...")
+                        time.sleep(API_CALL_DELAY)
+                    
+                    submission = process_submission(row, config, gemini_client)
+                    
+                    # Create result row (use original row data if available)
+                    result_row = getattr(submission, '_original_row_data', row).copy()
+                    result_row['Overall Score'] = submission.overall_score
+                    result_row['Status'] = submission.status
+                    result_row['Requirements Not Met'] = submission.requirements_not_met
+                    results.append(result_row)
                 except Exception as e:
-                    original_index = future_to_index[future]
-                    logger.error(f"Error processing submission {original_index + 1}: {e}", exc_info=True)
-                    error_row = rows[original_index].copy()
-                    error_row['Overall Score'] = 0
-                    error_row['Status'] = "Error"
-                    error_row['Requirements Not Met'] = f"Processing error: {str(e)}"
-                    indexed_results[original_index] = error_row
-        
-        # Reconstruct results in original order
-        results = [indexed_results[i] for i in range(len(rows))]
+                    logger.error(f"Error processing submission {i + 1}: {e}", exc_info=True)
+                    # Add error row
+                    result_row = row.copy()
+                    result_row['Overall Score'] = 0
+                    result_row['Status'] = "Error"
+                    result_row['Requirements Not Met'] = f"Processing error: {str(e)}"
+                    results.append(result_row)
+        else:
+            # Process submissions in parallel with rate limiting
+            # Use smaller number of workers to avoid hitting API rate limits
+            max_workers = min(DEFAULT_MAX_WORKERS, len(rows))
+            results = []
+            
+            def process_single_submission(row_data: dict, row_index: int) -> tuple[int, dict]:
+                """Process a single submission with rate limiting and return index and result."""
+                # Acquire semaphore to limit concurrent API calls
+                with _api_semaphore:
+                    try:
+                        logger.info(f"Processing submission {row_index + 1}/{len(rows)}")
+                        # Add delay to space out API calls
+                        if row_index > 0:
+                            time.sleep(API_CALL_DELAY)  # Use configured delay
+                        submission = process_submission(row_data, config, gemini_client)
+                        
+                        # Create result row (use original row data if available)
+                        result_row = getattr(submission, '_original_row_data', row_data).copy()
+                        result_row['Overall Score'] = submission.overall_score
+                        result_row['Status'] = submission.status
+                        result_row['Requirements Not Met'] = submission.requirements_not_met
+                        
+                        return row_index, result_row
+                    except Exception as e:
+                        # Check if it's a rate limit error
+                        error_str = str(e).lower()
+                        if '429' in error_str or 'rate limit' in error_str or 'quota' in error_str:
+                            logger.error(f"Rate limit detected during processing - will switch to sequential mode")
+                            _rate_limit_detected.set()
+                        
+                        logger.error(f"Error processing submission {row_index + 1}: {e}", exc_info=True)
+                        # Add error row
+                        result_row = row_data.copy()
+                        result_row['Overall Score'] = 0
+                        result_row['Status'] = "Error"
+                        result_row['Requirements Not Met'] = f"Processing error: {str(e)}"
+                        return row_index, result_row
+            
+            # Process submissions in parallel using ThreadPoolExecutor
+            logger.info(f"Processing {len(rows)} submissions with {max_workers} parallel workers...")
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                # Submit all tasks
+                future_to_index = {
+                    executor.submit(process_single_submission, row, i): i
+                    for i, row in enumerate(rows)
+                }
+                
+                # Collect results as they complete (maintain order by storing with index)
+                indexed_results = {}
+                for future in as_completed(future_to_index):
+                    try:
+                        row_index, result_row = future.result()
+                        indexed_results[row_index] = result_row
+                    except Exception as e:
+                        original_index = future_to_index[future]
+                        # Check if it's a rate limit error
+                        error_str = str(e).lower()
+                        if '429' in error_str or 'rate limit' in error_str or 'quota' in error_str:
+                            logger.error(f"Rate limit detected - will switch to sequential mode")
+                            _rate_limit_detected.set()
+                        
+                        logger.error(f"Error processing submission {original_index + 1}: {e}", exc_info=True)
+                        error_row = rows[original_index].copy()
+                        error_row['Overall Score'] = 0
+                        error_row['Status'] = "Error"
+                        error_row['Requirements Not Met'] = f"Processing error: {str(e)}"
+                        indexed_results[original_index] = error_row
+                
+                # Reconstruct results in original order
+                results = [indexed_results[i] for i in range(len(rows))]
         
         # Convert results to DataFrame
         results_df = pd.DataFrame(results)
@@ -337,58 +491,109 @@ async def validate_batch(
         # Reset batch hash tracker at start of new batch
         reset_batch_hash_tracker()
         
-        # Process submissions in parallel for better performance
-        max_workers = min(10, len(submissions))  # Limit to 10 parallel workers or number of submissions, whichever is smaller
-        results = []
+        # Check if rate limit was detected - if so, use sequential processing
+        use_sequential = _rate_limit_detected.is_set()
         
-        def process_single_submission(row_data: dict, row_index: int) -> tuple[int, dict]:
-            """Process a single submission and return index and result."""
-            try:
-                logger.info(f"Processing submission {row_index + 1}/{len(submissions)}")
-                submission = process_submission(row_data, config, gemini_client)
-                
-                # Create result row (use original row data if available)
-                result_row = getattr(submission, '_original_row_data', row_data).copy()
-                result_row['Overall Score'] = submission.overall_score
-                result_row['Status'] = submission.status
-                result_row['Requirements Not Met'] = submission.requirements_not_met
-                
-                return row_index, result_row
-            except Exception as e:
-                logger.error(f"Error processing submission {row_index + 1}: {e}", exc_info=True)
-                # Add error row
-                result_row = row_data.copy()
-                result_row['Overall Score'] = 0
-                result_row['Status'] = "Error"
-                result_row['Requirements Not Met'] = f"Processing error: {str(e)}"
-                return row_index, result_row
-        
-        # Process submissions in parallel using ThreadPoolExecutor
-        logger.info(f"Processing {len(submissions)} submissions with {max_workers} parallel workers...")
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            # Submit all tasks
-            future_to_index = {
-                executor.submit(process_single_submission, row, i): i
-                for i, row in enumerate(submissions)
-            }
+        if use_sequential:
+            logger.warning("Rate limit detected - switching to sequential processing mode")
+            logger.info(f"Processing {len(submissions)} submissions sequentially with {API_CALL_DELAY}s delay between API calls...")
+            results = []
             
-            # Collect results as they complete (maintain order by storing with index)
-            indexed_results = {}
-            for future in as_completed(future_to_index):
+            for i, row in enumerate(submissions):
                 try:
-                    row_index, result_row = future.result()
-                    indexed_results[row_index] = result_row
+                    logger.info(f"Processing submission {i + 1}/{len(submissions)} (sequential mode)")
+                    # Add delay between submissions to respect rate limits
+                    if i > 0:
+                        logger.debug(f"Waiting {API_CALL_DELAY}s before next submission...")
+                        time.sleep(API_CALL_DELAY)
+                    
+                    submission = process_submission(row, config, gemini_client)
+                    
+                    # Create result row (use original row data if available)
+                    result_row = getattr(submission, '_original_row_data', row).copy()
+                    result_row['Overall Score'] = submission.overall_score
+                    result_row['Status'] = submission.status
+                    result_row['Requirements Not Met'] = submission.requirements_not_met
+                    results.append(result_row)
                 except Exception as e:
-                    original_index = future_to_index[future]
-                    logger.error(f"Error processing submission {original_index + 1}: {e}", exc_info=True)
-                    error_row = submissions[original_index].copy()
-                    error_row['Overall Score'] = 0
-                    error_row['Status'] = "Error"
-                    error_row['Requirements Not Met'] = f"Processing error: {str(e)}"
-                    indexed_results[original_index] = error_row
-        
-        # Reconstruct results in original order
-        results = [indexed_results[i] for i in range(len(submissions))]
+                    logger.error(f"Error processing submission {i + 1}: {e}", exc_info=True)
+                    # Add error row
+                    result_row = row.copy()
+                    result_row['Overall Score'] = 0
+                    result_row['Status'] = "Error"
+                    result_row['Requirements Not Met'] = f"Processing error: {str(e)}"
+                    results.append(result_row)
+        else:
+            # Process submissions in parallel with rate limiting
+            # Use smaller number of workers to avoid hitting API rate limits
+            max_workers = min(DEFAULT_MAX_WORKERS, len(submissions))
+            results = []
+            
+            def process_single_submission(row_data: dict, row_index: int) -> tuple[int, dict]:
+                """Process a single submission with rate limiting and return index and result."""
+                # Acquire semaphore to limit concurrent API calls
+                with _api_semaphore:
+                    try:
+                        logger.info(f"Processing submission {row_index + 1}/{len(submissions)}")
+                        # Add delay to space out API calls
+                        if row_index > 0:
+                            time.sleep(API_CALL_DELAY)  # Use configured delay
+                        submission = process_submission(row_data, config, gemini_client)
+                        
+                        # Create result row (use original row data if available)
+                        result_row = getattr(submission, '_original_row_data', row_data).copy()
+                        result_row['Overall Score'] = submission.overall_score
+                        result_row['Status'] = submission.status
+                        result_row['Requirements Not Met'] = submission.requirements_not_met
+                        
+                        return row_index, result_row
+                    except Exception as e:
+                        # Check if it's a rate limit error
+                        error_str = str(e).lower()
+                        if '429' in error_str or 'rate limit' in error_str or 'quota' in error_str:
+                            logger.error(f"Rate limit detected during processing - will switch to sequential mode")
+                            _rate_limit_detected.set()
+                        
+                        logger.error(f"Error processing submission {row_index + 1}: {e}", exc_info=True)
+                        # Add error row
+                        result_row = row_data.copy()
+                        result_row['Overall Score'] = 0
+                        result_row['Status'] = "Error"
+                        result_row['Requirements Not Met'] = f"Processing error: {str(e)}"
+                        return row_index, result_row
+            
+            # Process submissions in parallel using ThreadPoolExecutor
+            logger.info(f"Processing {len(submissions)} submissions with {max_workers} parallel workers...")
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                # Submit all tasks
+                future_to_index = {
+                    executor.submit(process_single_submission, row, i): i
+                    for i, row in enumerate(submissions)
+                }
+                
+                # Collect results as they complete (maintain order by storing with index)
+                indexed_results = {}
+                for future in as_completed(future_to_index):
+                    try:
+                        row_index, result_row = future.result()
+                        indexed_results[row_index] = result_row
+                    except Exception as e:
+                        original_index = future_to_index[future]
+                        # Check if it's a rate limit error
+                        error_str = str(e).lower()
+                        if '429' in error_str or 'rate limit' in error_str or 'quota' in error_str:
+                            logger.error(f"Rate limit detected - will switch to sequential mode")
+                            _rate_limit_detected.set()
+                        
+                        logger.error(f"Error processing submission {original_index + 1}: {e}", exc_info=True)
+                        error_row = submissions[original_index].copy()
+                        error_row['Overall Score'] = 0
+                        error_row['Status'] = "Error"
+                        error_row['Requirements Not Met'] = f"Processing error: {str(e)}"
+                        indexed_results[original_index] = error_row
+                
+                # Reconstruct results in original order
+                results = [indexed_results[i] for i in range(len(submissions))]
         
         # Convert results to DataFrame
         results_df = pd.DataFrame(results)

@@ -1,6 +1,6 @@
 """Gemini API client for semantic validation with vision support. Falls back to Groq on failure."""
 import logging
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Callable
 import os
 import time
 import re
@@ -32,6 +32,14 @@ logger = logging.getLogger(__name__)
 
 # Global cache for Gemini API responses (keyed by content hash)
 _gemini_response_cache: Dict[str, str] = {}
+
+# Callback function to signal rate limit detection (set by app.py)
+_rate_limit_callback: Optional[Callable[[], None]] = None
+
+def set_rate_limit_callback(callback: Callable[[], None]):
+    """Set a callback function to be called when rate limit is detected."""
+    global _rate_limit_callback
+    _rate_limit_callback = callback
 
 
 class GeminiClient:
@@ -98,7 +106,7 @@ class GeminiClient:
     ) -> Optional[str]:
         """
         Call Gemini API with retry logic, rate limit handling, and caching.
-        Falls back to Groq if Gemini is unavailable or fails.
+        Falls back to Groq ONLY as last resort after all Gemini retries fail.
         
         Args:
             prompt: Prompt text
@@ -110,9 +118,9 @@ class GeminiClient:
         Returns:
             Response text or None if failed
         """
-        # If Gemini client not available, try Groq fallback immediately
+        # If Gemini client not available, try Groq fallback immediately (last resort)
         if not self.client:
-            logger.debug("Gemini client not available, trying Groq fallback...")
+            logger.debug("Gemini client not available, trying Groq fallback as last resort...")
             if self.groq_client and hasattr(self.groq_client, 'client') and self.groq_client.client:
                 # For text-only calls, Groq can handle it directly
                 if not image_path:
@@ -141,6 +149,11 @@ class GeminiClient:
             if cache_key in _gemini_response_cache:
                 logger.debug(f"Cache hit for prompt (model: {model})")
                 return _gemini_response_cache[cache_key]
+        
+        # Add delay before first API call to respect rate limits
+        # Gemini free tier: ~15 RPM = 4 seconds between requests minimum
+        # Using 5 seconds to be safe
+        time.sleep(5)
         
         for attempt in range(max_retries):
             try:
@@ -201,38 +214,51 @@ class GeminiClient:
                     '429' in error_str or 
                     'quota' in error_str.lower() or 
                     'rate limit' in error_str.lower() or
-                    'retry' in error_str.lower()
+                    'retry' in error_str.lower() or
+                    'resource_exhausted' in error_str.lower()
                 )
                 
                 if is_rate_limit:
+                    # Signal rate limit detection to app.py
+                    if _rate_limit_callback:
+                        try:
+                            _rate_limit_callback()
+                        except Exception as cb_error:
+                            logger.warning(f"Rate limit callback failed: {cb_error}")
+                    
                     # Extract retry delay from error message if available
                     retry_delay = self._extract_retry_delay(error_str)
                     if retry_delay:
+                        # Use extracted delay, but ensure minimum 5 seconds
+                        delay = max(retry_delay, 5.0)
                         logger.warning(
-                            f"Rate limit hit. Waiting {retry_delay}s before retry "
+                            f"Rate limit hit. Waiting {delay:.1f}s before retry "
                             f"(attempt {attempt + 1}/{max_retries})"
                         )
-                        time.sleep(retry_delay)
+                        time.sleep(delay)
                     else:
-                        # Default delay: exponential backoff with minimum 1 second
-                        delay = min(1 * (2 ** attempt), 60)  # Max 60 seconds
+                        # Exponential backoff: 5s, 10s, 20s (max 60s)
+                        # Base delay of 5 seconds for Gemini free tier (15 RPM)
+                        delay = min(5 * (2 ** attempt), 60)  # 5s, 10s, 20s, max 60s
                         logger.warning(
-                            f"Rate limit hit. Waiting {delay}s before retry "
+                            f"Rate limit hit. Waiting {delay:.1f}s before retry "
                             f"(attempt {attempt + 1}/{max_retries})"
                         )
                         time.sleep(delay)
                 else:
                     logger.warning(f"Gemini API call failed (attempt {attempt + 1}/{max_retries}): {e}")
+                    # Small delay before retry for non-rate-limit errors
+                    time.sleep(1)
                 
+                # Only try Groq as LAST RESORT after all Gemini retries fail
                 if attempt == max_retries - 1:
-                    logger.warning("All Gemini API retry attempts failed, trying Groq fallback...")
-                    # Fallback to Groq if Gemini fails
+                    logger.warning("All Gemini API retry attempts failed, trying Groq as last resort...")
+                    # Fallback to Groq ONLY if Gemini completely fails
                     if self.groq_client and hasattr(self.groq_client, 'client') and self.groq_client.client:
-                        logger.info("Falling back to Groq API")
+                        logger.info("Falling back to Groq API as last resort")
                         # For image analysis, Groq uses a different approach (text-based for now)
                         if image_path:
                             logger.warning("Groq fallback for image analysis may have limited capabilities")
-                            # Try text-based analysis with Groq (Groq vision is limited)
                             try:
                                 groq_response = self.groq_client._call_groq(prompt, model=self.groq_client.image_model, use_cache=use_cache)
                                 if groq_response:
@@ -252,10 +278,6 @@ class GeminiClient:
                     
                     logger.error("Both Gemini and Groq API calls failed")
                     return None
-                
-                # Small delay before retry for non-rate-limit errors
-                if not is_rate_limit:
-                    time.sleep(1)
         
         return None
     
