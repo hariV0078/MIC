@@ -51,18 +51,24 @@ app.add_middleware(
 _config: Optional[ValidationConfig] = None
 _gemini_client: Optional[GeminiClient] = None
 
-# Rate limiting: Semaphore to limit concurrent API calls
-# Default: 2 concurrent API calls to avoid hitting rate limits
-MAX_CONCURRENT_API_CALLS = int(os.getenv('MAX_CONCURRENT_API_CALLS', '2'))
+# Rate limiting: Use smart rate limiter and dynamic concurrency
+# The rate limiter tracks requests per minute and adjusts delays automatically
+from event_validator.utils.rate_limiter import get_rate_limiter
+
+# Calculate optimal concurrency based on rate limits
+# Default: 15 RPM for Gemini free tier
+GEMINI_RPM = int(os.getenv('GEMINI_RPM_LIMIT', '15'))
+# Use 80% of capacity for parallel processing (allows burst)
+# Each submission needs ~4-5 API calls, so we can process more submissions concurrently
+OPTIMAL_CONCURRENCY = max(2, int((GEMINI_RPM * 0.8) / 4))  # ~3 workers for 15 RPM
+MAX_CONCURRENT_API_CALLS = OPTIMAL_CONCURRENCY * 2  # Allow more API calls since rate limiter handles it
 _api_semaphore = threading.Semaphore(MAX_CONCURRENT_API_CALLS)
 
-# Default max workers for parallel processing (reduced to avoid rate limits)
-DEFAULT_MAX_WORKERS = int(os.getenv('DEFAULT_MAX_WORKERS', '2'))
+# Default max workers for parallel processing (optimized based on rate limits)
+DEFAULT_MAX_WORKERS = int(os.getenv('DEFAULT_MAX_WORKERS', str(OPTIMAL_CONCURRENCY)))
 
 # Rate limit detection: Track if we're in rate limit mode (sequential processing)
 _rate_limit_detected = threading.Event()
-# Delay between API calls when in sequential mode (5 seconds for Gemini free tier: 15 RPM)
-API_CALL_DELAY = float(os.getenv('API_CALL_DELAY', '5.0'))  # seconds
 
 
 @app.on_event("startup")
@@ -296,16 +302,14 @@ async def validate_upload(
         
         if use_sequential:
             logger.warning("Rate limit detected - switching to sequential processing mode")
-            logger.info(f"Processing {len(rows)} submissions sequentially with {API_CALL_DELAY}s delay between API calls...")
+            rate_limiter = get_rate_limiter()
+            logger.info(f"Processing {len(rows)} submissions sequentially (using rate limiter: {rate_limiter.get_current_rate():.1f} RPM)...")
             results = []
             
             for i, row in enumerate(rows):
                 try:
                     logger.info(f"Processing submission {i + 1}/{len(rows)} (sequential mode)")
-                    # Add delay between submissions to respect rate limits
-                    if i > 0:
-                        logger.debug(f"Waiting {API_CALL_DELAY}s before next submission...")
-                        time.sleep(API_CALL_DELAY)
+                    # Rate limiter will handle delays automatically in gemini_client
                     
                     submission = process_submission(row, config, gemini_client)
                     
@@ -332,12 +336,11 @@ async def validate_upload(
             def process_single_submission(row_data: dict, row_index: int) -> tuple[int, dict]:
                 """Process a single submission with rate limiting and return index and result."""
                 # Acquire semaphore to limit concurrent API calls
+                # Note: The rate limiter in gemini_client will handle actual API rate limiting
                 with _api_semaphore:
                     try:
                         logger.info(f"Processing submission {row_index + 1}/{len(rows)}")
-                        # Add delay to space out API calls
-                        if row_index > 0:
-                            time.sleep(API_CALL_DELAY)  # Use configured delay
+                        # No fixed delay - rate limiter handles timing automatically
                         submission = process_submission(row_data, config, gemini_client)
                         
                         # Create result row (use original row data if available)
@@ -496,16 +499,14 @@ async def validate_batch(
         
         if use_sequential:
             logger.warning("Rate limit detected - switching to sequential processing mode")
-            logger.info(f"Processing {len(submissions)} submissions sequentially with {API_CALL_DELAY}s delay between API calls...")
+            rate_limiter = get_rate_limiter()
+            logger.info(f"Processing {len(submissions)} submissions sequentially (using rate limiter: {rate_limiter.get_current_rate():.1f} RPM)...")
             results = []
             
             for i, row in enumerate(submissions):
                 try:
                     logger.info(f"Processing submission {i + 1}/{len(submissions)} (sequential mode)")
-                    # Add delay between submissions to respect rate limits
-                    if i > 0:
-                        logger.debug(f"Waiting {API_CALL_DELAY}s before next submission...")
-                        time.sleep(API_CALL_DELAY)
+                    # Rate limiter will handle delays automatically in gemini_client
                     
                     submission = process_submission(row, config, gemini_client)
                     
@@ -532,12 +533,11 @@ async def validate_batch(
             def process_single_submission(row_data: dict, row_index: int) -> tuple[int, dict]:
                 """Process a single submission with rate limiting and return index and result."""
                 # Acquire semaphore to limit concurrent API calls
+                # Note: The rate limiter in gemini_client will handle actual API rate limiting
                 with _api_semaphore:
                     try:
                         logger.info(f"Processing submission {row_index + 1}/{len(submissions)}")
-                        # Add delay to space out API calls
-                        if row_index > 0:
-                            time.sleep(API_CALL_DELAY)  # Use configured delay
+                        # No fixed delay - rate limiter handles timing automatically
                         submission = process_submission(row_data, config, gemini_client)
                         
                         # Create result row (use original row data if available)

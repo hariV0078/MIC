@@ -4,6 +4,7 @@ import signal
 import sys
 from dotenv import load_dotenv
 from event_validator.utils.logging_config import setup_logging
+from event_validator.utils.downloader import stop_periodic_cleanup
 
 # Load environment variables from .env file
 load_dotenv()
@@ -11,6 +12,8 @@ load_dotenv()
 def signal_handler(sig, frame):
     """Handle shutdown signals gracefully."""
     print("\nShutting down server...")
+    # Stop cleanup thread on shutdown
+    stop_periodic_cleanup()
     sys.exit(0)
 
 if __name__ == "__main__":

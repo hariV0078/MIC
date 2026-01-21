@@ -7,6 +7,7 @@ import re
 import hashlib
 from pathlib import Path
 from dotenv import load_dotenv
+from event_validator.utils.rate_limiter import get_rate_limiter
 
 # Load environment variables from .env file
 load_dotenv()
@@ -150,10 +151,12 @@ class GeminiClient:
                 logger.debug(f"Cache hit for prompt (model: {model})")
                 return _gemini_response_cache[cache_key]
         
-        # Add delay before first API call to respect rate limits
-        # Gemini free tier: ~15 RPM = 4 seconds between requests minimum
-        # Using 5 seconds to be safe
-        time.sleep(5)
+        # Use smart rate limiter instead of fixed delay
+        # This calculates the exact delay needed based on recent request history
+        rate_limiter = get_rate_limiter()
+        delay = rate_limiter.acquire(wait=True)
+        if delay > 0:
+            logger.debug(f"Rate limiter applied {delay:.2f}s delay (current rate: {rate_limiter.get_current_rate():.1f} RPM)")
         
         for attempt in range(max_retries):
             try:
