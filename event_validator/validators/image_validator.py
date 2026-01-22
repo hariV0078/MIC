@@ -52,7 +52,7 @@ def validate_geotag_present(
 
 def validate_banner_poster_visible(
     submission: EventSubmission,
-    gemini_client: GeminiClient
+    analysis: Optional[dict] = None
 ) -> ValidationResult:
     """Check if banner/poster is visible in images."""
     rule_name, points = IMAGE_RULES[1]
@@ -65,22 +65,13 @@ def validate_banner_poster_visible(
             message="No images provided"
         )
     
-    # Use Gemini to analyze images for banner/poster
-    # For now, check first image (can be extended to check all)
-    image_path = submission.images[0].path
-    if not isinstance(image_path, Path):
-        image_path = Path(image_path)
-    
-    # Get event context for better analysis
-    row_data = submission.row_data
-    event_title = row_data.get('Title', '') or row_data.get('activity_name', '')
-    event_theme = row_data.get('Theme', '')
-    
-    analysis = gemini_client.analyze_image(
-        image_path=image_path,
-        event_title=event_title,
-        event_theme=event_theme
-    )
+    if analysis is None:
+        return ValidationResult(
+            criterion=rule_name,
+            passed=False,
+            points_awarded=0,
+            message="Image analysis not provided"
+        )
     
     if analysis.get("has_banner", False):
         return ValidationResult(
@@ -100,7 +91,7 @@ def validate_banner_poster_visible(
 
 def validate_real_activity_scene(
     submission: EventSubmission,
-    gemini_client: GeminiClient
+    analysis: Optional[dict] = None
 ) -> ValidationResult:
     """Check if event scene is real activity."""
     rule_name, points = IMAGE_RULES[2]
@@ -113,21 +104,13 @@ def validate_real_activity_scene(
             message="No images provided"
         )
     
-    # Use Gemini to analyze if image shows real event
-    image_path = submission.images[0].path
-    if not isinstance(image_path, Path):
-        image_path = Path(image_path)
-    
-    # Get event context for better analysis
-    row_data = submission.row_data
-    event_title = row_data.get('Title', '') or row_data.get('activity_name', '')
-    event_theme = row_data.get('Theme', '')
-    
-    analysis = gemini_client.analyze_image(
-        image_path=image_path,
-        event_title=event_title,
-        event_theme=event_theme
-    )
+    if analysis is None:
+        return ValidationResult(
+            criterion=rule_name,
+            passed=False,
+            points_awarded=0,
+            message="Image analysis not provided"
+        )
     
     if analysis.get("is_real_event", False):
         return ValidationResult(
@@ -147,7 +130,7 @@ def validate_real_activity_scene(
 
 def validate_event_mode_matches(
     submission: EventSubmission,
-    gemini_client: GeminiClient
+    analysis: Optional[dict] = None
 ) -> ValidationResult:
     """Check if event mode matches (online/offline)."""
     rule_name, points = IMAGE_RULES[3]
@@ -163,21 +146,13 @@ def validate_event_mode_matches(
             message="No images provided"
         )
     
-    # Use Gemini to analyze if mode matches
-    image_path = submission.images[0].path
-    if not isinstance(image_path, Path):
-        image_path = Path(image_path)
-    
-    # Get event context for better analysis
-    event_title = row_data.get('Title', '') or row_data.get('activity_name', '')
-    event_theme = row_data.get('Theme', '')
-    
-    analysis = gemini_client.analyze_image(
-        image_path=image_path,
-        event_mode=event_mode,
-        event_title=event_title,
-        event_theme=event_theme
-    )
+    if analysis is None:
+        return ValidationResult(
+            criterion=rule_name,
+            passed=False,
+            points_awarded=0,
+            message="Image analysis not provided"
+        )
     
     if analysis.get("mode_matches", False):
         return ValidationResult(
@@ -197,7 +172,7 @@ def validate_event_mode_matches(
 
 def validate_20_plus_participants_visible(
     submission: EventSubmission,
-    gemini_client: GeminiClient
+    analysis: Optional[dict] = None
 ) -> ValidationResult:
     """Check if 20+ participants are visible in images."""
     rule_name, points = IMAGE_RULES[4]
@@ -210,21 +185,13 @@ def validate_20_plus_participants_visible(
             message="No images provided"
         )
     
-    # Use Gemini to analyze participant count
-    image_path = submission.images[0].path
-    if not isinstance(image_path, Path):
-        image_path = Path(image_path)
-    
-    # Get event context for better analysis
-    row_data = submission.row_data
-    event_title = row_data.get('Title', '') or row_data.get('activity_name', '')
-    event_theme = row_data.get('Theme', '')
-    
-    analysis = gemini_client.analyze_image(
-        image_path=image_path,
-        event_title=event_title,
-        event_theme=event_theme
-    )
+    if analysis is None:
+        return ValidationResult(
+            criterion=rule_name,
+            passed=False,
+            points_awarded=0,
+            message="Image analysis not provided"
+        )
     
     if analysis.get("has_20_plus_participants", False):
         return ValidationResult(
@@ -249,10 +216,39 @@ def validate_images(submission: EventSubmission, gemini_client: GeminiClient) ->
     # Geotag validation is DISABLED per user request
     # results.append(validate_geotag_present(submission))
     
-    results.append(validate_banner_poster_visible(submission, gemini_client))
-    results.append(validate_real_activity_scene(submission, gemini_client))
-    results.append(validate_event_mode_matches(submission, gemini_client))
-    results.append(validate_20_plus_participants_visible(submission, gemini_client))
+    if not submission.images:
+        # Return failed results for all validations if no images
+        results.append(validate_banner_poster_visible(submission, None))
+        results.append(validate_real_activity_scene(submission, None))
+        results.append(validate_event_mode_matches(submission, None))
+        results.append(validate_20_plus_participants_visible(submission, None))
+        return results
+    
+    # OPTIMIZATION: Call analyze_image() ONCE and reuse results for all validations
+    # This reduces 4 API calls to 1 API call per image (4x faster!)
+    image_path = submission.images[0].path
+    if not isinstance(image_path, Path):
+        image_path = Path(image_path)
+    
+    # Get event context for better analysis
+    row_data = submission.row_data
+    event_title = row_data.get('Title', '') or row_data.get('activity_name', '')
+    event_theme = row_data.get('Theme', '')
+    event_mode = str(row_data.get('Event Mode', '')).strip().lower()
+    
+    logger.info(f"Analyzing image once for all validations: {image_path.name}")
+    analysis = gemini_client.analyze_image(
+        image_path=image_path,
+        event_mode=event_mode,
+        event_title=event_title,
+        event_theme=event_theme
+    )
+    
+    # Reuse the same analysis result for all validation functions
+    results.append(validate_banner_poster_visible(submission, analysis))
+    results.append(validate_real_activity_scene(submission, analysis))
+    results.append(validate_event_mode_matches(submission, analysis))
+    results.append(validate_20_plus_participants_visible(submission, analysis))
     
     return results
 

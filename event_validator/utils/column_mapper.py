@@ -74,10 +74,11 @@ def map_row_to_standard_format(row_data: Dict[str, Any]) -> Dict[str, Any]:
     
     # Duration mapping (activity_duration is in hours)
     activity_duration = row_data.get('activity_duration')
+    duration_hours_float = None
     if activity_duration is not None:
         try:
-            duration_hours = float(activity_duration)
-            mapped['Duration'] = f"{duration_hours}h"
+            duration_hours_float = float(activity_duration)
+            mapped['Duration'] = f"{duration_hours_float}h"
         except (ValueError, TypeError):
             mapped['Duration'] = str(activity_duration) if activity_duration else ""
     else:
@@ -92,10 +93,10 @@ def map_row_to_standard_format(row_data: Dict[str, Any]) -> Dict[str, Any]:
     except (ValueError, TypeError):
         mapped['Participants'] = "0"
     
-    # Level determination
+    # Level determination (use converted float value)
     level = determine_level(
         event_type=mapped.get('Event Type', ''),
-        duration_hours=activity_duration
+        duration_hours=duration_hours_float
     )
     mapped['Level'] = str(level) if level else ""
     
@@ -177,6 +178,12 @@ def determine_level(event_type: str, duration_hours: Optional[float]) -> Optiona
     Returns level (1-4) or None if cannot be determined.
     """
     if not event_type or duration_hours is None:
+        return None
+    
+    # Ensure duration_hours is a numeric type
+    try:
+        duration_hours = float(duration_hours)
+    except (ValueError, TypeError):
         return None
     
     event_type = event_type.strip()

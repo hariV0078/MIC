@@ -7,8 +7,9 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Optional, List, Dict, Any
-from fastapi import FastAPI, UploadFile, File, HTTPException, Query
-from fastapi.responses import JSONResponse, FileResponse, StreamingResponse, Response
+from datetime import datetime
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 import pandas as pd
 from dotenv import load_dotenv
@@ -24,6 +25,11 @@ from event_validator.utils.downloader import (
     cleanup_old_files,
     cleanup_all_files,
     FILE_MAX_AGE
+)
+from event_validator.utils.file_operations import (
+    get_output_file_path,
+    list_output_files,
+    OUTPUT_DIR
 )
 
 # Load environment variables from .env file
@@ -75,6 +81,10 @@ _rate_limit_detected = threading.Event()
 async def startup_event():
     """Initialize services on application startup."""
     logger.info("Application startup: Initializing services...")
+    
+    # Ensure outputs directory exists
+    OUTPUT_DIR.mkdir(exist_ok=True)
+    logger.info(f"Output directory: {OUTPUT_DIR.absolute()}")
     
     # Start periodic cleanup of downloaded files
     start_periodic_cleanup()
@@ -136,36 +146,6 @@ def get_gemini_client() -> GeminiClient:
     return _gemini_client
 
 
-def read_file_to_dataframe(file: UploadFile) -> pd.DataFrame:
-    """Read CSV or XLSX file to pandas DataFrame."""
-    file_extension = Path(file.filename).suffix.lower()
-    
-    # Read file content
-    contents = file.file.read()
-    
-    if file_extension == '.csv':
-        # Try different encodings
-        for encoding in ['utf-8', 'latin-1', 'cp1252']:
-            try:
-                df = pd.read_csv(io.BytesIO(contents), encoding=encoding)
-                return df
-            except UnicodeDecodeError:
-                continue
-        # If all encodings fail, use utf-8 with errors='ignore'
-        df = pd.read_csv(io.BytesIO(contents), encoding='utf-8', errors='ignore')
-        return df
-    
-    elif file_extension in ['.xlsx', '.xls']:
-        df = pd.read_excel(io.BytesIO(contents))
-        return df
-    
-    else:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported file format: {file_extension}. Supported formats: .csv, .xlsx, .xls"
-        )
-
-
 def dataframe_to_dict_list(df: pd.DataFrame) -> List[Dict[str, Any]]:
     """Convert DataFrame to list of dictionaries."""
     # Replace NaN with empty strings
@@ -181,9 +161,12 @@ async def root():
         "message": "Event Validation System API",
         "version": "2.0.0",
         "endpoints": {
-            "POST /validate/upload": "Upload CSV/XLSX file for validation",
+            "POST /validate/batch": "Validate batch of submissions from JSON",
+            "GET /download/{filename}": "Download generated validation results CSV",
+            "GET /downloads": "List all available output files",
             "GET /health": "Health check endpoint"
-        }
+        },
+        "note": "Use CLI tool (python -m event_validator.main) to process CSV files from terminal"
     }
 
 
@@ -247,215 +230,6 @@ async def manual_cleanup(
     except Exception as e:
         logger.error(f"Manual cleanup failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Cleanup failed: {str(e)}")
-
-
-@app.post("/validate/upload")
-async def validate_upload(
-    file: UploadFile = File(...),
-    return_format: str = Query("csv", pattern="^(json|csv|xlsx)$"),  # Default to CSV
-    base_image_path: Optional[str] = Query(None, description="Base directory for duplicate detection"),
-    gemini_api_key: Optional[str] = Query(None, description="Gemini API key (overrides env var)"),
-    acceptance_threshold: Optional[int] = Query(None, description="Acceptance threshold (overrides default 75)")
-):
-    """
-    Upload and validate a CSV or XLSX file.
-    
-    - **file**: CSV or XLSX file containing event submissions
-    - **return_format**: Response format - 'json', 'csv', or 'xlsx'
-    - **base_image_path**: Optional base directory for duplicate detection
-    - **gemini_api_key**: Optional Gemini API key (overrides environment variable)
-    - **acceptance_threshold**: Optional acceptance threshold (overrides default 75)
-    """
-    try:
-        # Read file to DataFrame
-        logger.info(f"Processing file: {file.filename}")
-        df = read_file_to_dataframe(file)
-        
-        if df.empty:
-            raise HTTPException(status_code=400, detail="File is empty")
-        
-        # Get configuration
-        config = get_config()
-        
-        # Override config with query parameters if provided
-        if base_image_path:
-            config.base_image_path = Path(base_image_path)
-        if gemini_api_key:
-            config.groq_api_key = gemini_api_key  # Using groq_api_key field for backward compatibility
-            # Recreate Gemini client with new key and Groq fallback
-            global _gemini_client
-            groq_key = os.getenv('GROQ_API_KEY') or os.getenv('GROQ_CLOUD_API')
-            _gemini_client = GeminiClient(api_key=gemini_api_key, groq_api_key=groq_key)
-        if acceptance_threshold:
-            config.acceptance_threshold = acceptance_threshold
-        
-        gemini_client = get_gemini_client()
-        
-        # Convert DataFrame to list of dicts
-        rows = dataframe_to_dict_list(df)
-        
-        # Reset batch hash tracker at start of new batch
-        reset_batch_hash_tracker()
-        
-        # Check if rate limit was detected - if so, use sequential processing
-        use_sequential = _rate_limit_detected.is_set()
-        
-        if use_sequential:
-            logger.warning("Rate limit detected - switching to sequential processing mode")
-            rate_limiter = get_rate_limiter()
-            logger.info(f"Processing {len(rows)} submissions sequentially (using rate limiter: {rate_limiter.get_current_rate():.1f} RPM)...")
-            results = []
-            
-            for i, row in enumerate(rows):
-                try:
-                    logger.info(f"Processing submission {i + 1}/{len(rows)} (sequential mode)")
-                    # Rate limiter will handle delays automatically in gemini_client
-                    
-                    submission = process_submission(row, config, gemini_client)
-                    
-                    # Create result row (use original row data if available)
-                    result_row = getattr(submission, '_original_row_data', row).copy()
-                    result_row['Overall Score'] = submission.overall_score
-                    result_row['Status'] = submission.status
-                    result_row['Requirements Not Met'] = submission.requirements_not_met
-                    results.append(result_row)
-                except Exception as e:
-                    logger.error(f"Error processing submission {i + 1}: {e}", exc_info=True)
-                    # Add error row
-                    result_row = row.copy()
-                    result_row['Overall Score'] = 0
-                    result_row['Status'] = "Error"
-                    result_row['Requirements Not Met'] = f"Processing error: {str(e)}"
-                    results.append(result_row)
-        else:
-            # Process submissions in parallel with rate limiting
-            # Use smaller number of workers to avoid hitting API rate limits
-            max_workers = min(DEFAULT_MAX_WORKERS, len(rows))
-            results = []
-            
-            def process_single_submission(row_data: dict, row_index: int) -> tuple[int, dict]:
-                """Process a single submission with rate limiting and return index and result."""
-                # Acquire semaphore to limit concurrent API calls
-                # Note: The rate limiter in gemini_client will handle actual API rate limiting
-                with _api_semaphore:
-                    try:
-                        logger.info(f"Processing submission {row_index + 1}/{len(rows)}")
-                        # No fixed delay - rate limiter handles timing automatically
-                        submission = process_submission(row_data, config, gemini_client)
-                        
-                        # Create result row (use original row data if available)
-                        result_row = getattr(submission, '_original_row_data', row_data).copy()
-                        result_row['Overall Score'] = submission.overall_score
-                        result_row['Status'] = submission.status
-                        result_row['Requirements Not Met'] = submission.requirements_not_met
-                        
-                        return row_index, result_row
-                    except Exception as e:
-                        # Check if it's a rate limit error
-                        error_str = str(e).lower()
-                        if '429' in error_str or 'rate limit' in error_str or 'quota' in error_str:
-                            logger.error(f"Rate limit detected during processing - will switch to sequential mode")
-                            _rate_limit_detected.set()
-                        
-                        logger.error(f"Error processing submission {row_index + 1}: {e}", exc_info=True)
-                        # Add error row
-                        result_row = row_data.copy()
-                        result_row['Overall Score'] = 0
-                        result_row['Status'] = "Error"
-                        result_row['Requirements Not Met'] = f"Processing error: {str(e)}"
-                        return row_index, result_row
-            
-            # Process submissions in parallel using ThreadPoolExecutor
-            logger.info(f"Processing {len(rows)} submissions with {max_workers} parallel workers...")
-            with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                # Submit all tasks
-                future_to_index = {
-                    executor.submit(process_single_submission, row, i): i
-                    for i, row in enumerate(rows)
-                }
-                
-                # Collect results as they complete (maintain order by storing with index)
-                indexed_results = {}
-                for future in as_completed(future_to_index):
-                    try:
-                        row_index, result_row = future.result()
-                        indexed_results[row_index] = result_row
-                    except Exception as e:
-                        original_index = future_to_index[future]
-                        # Check if it's a rate limit error
-                        error_str = str(e).lower()
-                        if '429' in error_str or 'rate limit' in error_str or 'quota' in error_str:
-                            logger.error(f"Rate limit detected - will switch to sequential mode")
-                            _rate_limit_detected.set()
-                        
-                        logger.error(f"Error processing submission {original_index + 1}: {e}", exc_info=True)
-                        error_row = rows[original_index].copy()
-                        error_row['Overall Score'] = 0
-                        error_row['Status'] = "Error"
-                        error_row['Requirements Not Met'] = f"Processing error: {str(e)}"
-                        indexed_results[original_index] = error_row
-                
-                # Reconstruct results in original order
-                results = [indexed_results[i] for i in range(len(rows))]
-        
-        # Convert results to DataFrame
-        results_df = pd.DataFrame(results)
-        
-        # Ensure all required fields are present and properly formatted
-        if 'Overall Score' not in results_df.columns:
-            results_df['Overall Score'] = 0
-        if 'Status' not in results_df.columns:
-            results_df['Status'] = 'Error'
-        if 'Requirements Not Met' not in results_df.columns:
-            results_df['Requirements Not Met'] = ''
-        
-        # Convert Overall Score to integer for consistency
-        results_df['Overall Score'] = pd.to_numeric(results_df['Overall Score'], errors='coerce').fillna(0).astype(int)
-        
-        # Return based on format
-        if return_format == "json":
-            return JSONResponse(content=results_df.to_dict('records'))
-        
-        elif return_format == "csv":
-            # Create CSV as bytes with proper encoding for file download
-            # Generate CSV content and encode with UTF-8-sig (includes BOM for Excel compatibility)
-            csv_content = results_df.to_csv(index=False)
-            csv_bytes = csv_content.encode('utf-8-sig')
-            
-            # Create a generator function for StreamingResponse (required for file downloads)
-            def generate_csv():
-                yield csv_bytes
-            
-            return StreamingResponse(
-                generate_csv(),
-                media_type="text/csv",
-                headers={
-                    "Content-Disposition": 'attachment; filename="validation_results.csv"',
-                    "Content-Type": "text/csv; charset=utf-8",
-                    "Cache-Control": "no-cache, no-store, must-revalidate",
-                    "Pragma": "no-cache",
-                    "Expires": "0"
-                }
-            )
-        
-        elif return_format == "xlsx":
-            # Create XLSX in memory
-            output = io.BytesIO()
-            with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                results_df.to_excel(writer, index=False, sheet_name='Validation Results')
-            output.seek(0)
-            
-            return StreamingResponse(
-                output,
-                media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                headers={"Content-Disposition": f"attachment; filename=validation_results.xlsx"}
-            )
-    
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error processing file: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
 @app.post("/validate/batch")
@@ -651,6 +425,81 @@ async def validate_batch(
     except Exception as e:
         logger.error(f"Error processing batch: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@app.get("/download/{filename}")
+async def download_file(filename: str):
+    """
+    Download a generated validation results CSV file.
+    
+    - **filename**: Name of the output file to download (must be a CSV file in outputs directory)
+    
+    Returns:
+        File download response with the CSV file
+    """
+    try:
+        output_path = get_output_file_path(filename)
+        
+        if output_path is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"File not found: {filename}. Use /downloads to list available files."
+            )
+        
+        return FileResponse(
+            path=output_path,
+            media_type="text/csv",
+            filename=filename,
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache",
+                "Expires": "0"
+            }
+        )
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error downloading file {filename}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to download file: {str(e)}")
+
+
+@app.get("/downloads")
+async def list_downloads():
+    """
+    List all available output CSV files in the outputs directory.
+    
+    Returns:
+        JSON response with list of available output files
+    """
+    try:
+        files = list_output_files()
+        
+        # Get file details (size, modification time)
+        file_details = []
+        for filename in files:
+            file_path = OUTPUT_DIR / filename
+            if file_path.exists():
+                stat = file_path.stat()
+                file_details.append({
+                    "filename": filename,
+                    "size_bytes": stat.st_size,
+                    "size_mb": round(stat.st_size / (1024 * 1024), 2),
+                    "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                    "download_url": f"/download/{filename}"
+                })
+        
+        return JSONResponse(content={
+            "status": "success",
+            "output_directory": str(OUTPUT_DIR.absolute()),
+            "file_count": len(file_details),
+            "files": file_details
+        })
+    
+    except Exception as e:
+        logger.error(f"Error listing downloads: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to list files: {str(e)}")
 
 
 if __name__ == "__main__":

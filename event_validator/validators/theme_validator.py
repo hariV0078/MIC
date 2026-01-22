@@ -77,14 +77,15 @@ def validate_theme_alignment(
     # activity_name is the primary field containing the event title
     event_title_for_check = activity_name or user_title or expected_title
     
-    # Use Gemini for semantic alignment check
-    logger.debug("  Calling Gemini API for theme alignment check...")
+    # Use Gemini/Groq for semantic alignment check (adaptive routing: prefers Groq for text tasks)
+    logger.debug("  Calling API for theme alignment check (adaptive routing: prefers Groq for text)...")
     logger.debug(f"  Using event title for theme check: {event_title_for_check[:100] if event_title_for_check else 'N/A'}")
     aligned = gemini_client.check_theme_alignment(
         title=event_title_for_check,
         objectives=objectives,
         learning_outcomes=learning_outcomes,
-        theme=theme
+        theme=theme,
+        prefer_groq=True  # Prefer Groq for text tasks to preserve Gemini quota for vision
     )
     
     if aligned:

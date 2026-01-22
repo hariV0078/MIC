@@ -51,12 +51,23 @@ class TokenBucketRateLimiter:
             f"(safety: {safety_factor*100:.0f}%), burst: {self.burst_size}"
         )
     
-    def acquire(self, wait: bool = True) -> float:
+    def estimate_tokens(self, prompt: str, has_image: bool = False) -> int:
+        """
+        Rough token estimation (1 token ≈ 4 characters for text, images count as ~1000 tokens).
+        This is a simple heuristic - actual tokenization may vary.
+        """
+        text_tokens = len(prompt) // 4
+        image_tokens = 1000 if has_image else 0
+        return text_tokens + image_tokens
+    
+    def acquire(self, wait: bool = True, estimated_tokens: Optional[int] = None) -> float:
         """
         Acquire permission to make a request. Returns delay needed in seconds.
         
         Args:
             wait: If True, wait for the calculated delay. If False, return delay but don't wait.
+            estimated_tokens: Optional token count for token-aware rate limiting.
+                           If provided, larger requests get slightly longer delays.
         
         Returns:
             Delay that was applied (or would be applied) in seconds
@@ -72,13 +83,23 @@ class TokenBucketRateLimiter:
             # Calculate delay needed
             delay = 0.0
             
+            # Token-aware adjustment: larger requests get slightly longer delays
+            token_multiplier = 1.0
+            if estimated_tokens:
+                # For requests > 2000 tokens, add small delay multiplier
+                if estimated_tokens > 2000:
+                    token_multiplier = 1.2  # 20% longer delay for large requests
+                elif estimated_tokens > 1000:
+                    token_multiplier = 1.1  # 10% longer delay for medium requests
+                # Small requests (< 1000 tokens) get no multiplier (token_multiplier = 1.0)
+            
             # Check if we're at the limit
             if len(self._request_times) >= self.requests_per_minute:
                 # Calculate how long to wait until oldest request expires
                 oldest_request = self._request_times[0]
                 time_until_oldest_expires = (oldest_request + 60.0) - now
-                delay = max(0.0, time_until_oldest_expires + 0.1)  # Add small buffer
-                logger.debug(f"Rate limit reached ({len(self._request_times)}/{self.requests_per_minute}), waiting {delay:.2f}s")
+                delay = max(0.0, time_until_oldest_expires + 0.1) * token_multiplier  # Apply token multiplier
+                logger.debug(f"Rate limit reached ({len(self._request_times)}/{self.requests_per_minute}), waiting {delay:.2f}s (tokens: {estimated_tokens or 'unknown'})")
             else:
                 # Not at limit, but ensure minimum spacing for burst protection
                 # Calculate minimum time between requests
@@ -86,7 +107,7 @@ class TokenBucketRateLimiter:
                 time_since_last = now - self._last_request_time
                 
                 if time_since_last < min_interval:
-                    delay = min_interval - time_since_last
+                    delay = (min_interval - time_since_last) * token_multiplier
                     delay = min(delay, 1.0)  # Cap at 1 second for non-limit delays
                 else:
                     # No delay needed

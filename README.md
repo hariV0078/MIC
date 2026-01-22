@@ -78,54 +78,61 @@ event_validator/
 
 ## Usage
 
-### Option 1: FastAPI REST API (Recommended)
+### CLI Tool (Interactive Terminal Input)
 
-See [API_README.md](API_README.md) for detailed API documentation.
+Process CSV files directly from the terminal with interactive prompts. Output files are automatically saved to `./outputs/` directory.
 
-**Quick Start:**
+**Basic Interactive Usage:**
 ```bash
-# Start the API server
-python run_api.py
+# Run the script - it will prompt for input file path
+python main.py
 
-# API will be available at http://localhost:8000
-# Documentation at http://localhost:8000/docs
+# You'll see:
+# ============================================================
+# Event Validation System - Interactive Mode
+# ============================================================
+# 
+# Enter the input CSV file path: /path/to/input.csv
+# 
+# Input file: /path/to/input.csv
+# Output will be saved to: ./outputs/validation_results_input_20250122_143022.csv
+# 
+# Starting processing...
 ```
 
-**Upload and validate a file:**
+**Non-Interactive Mode (with command-line arguments):**
 ```bash
-curl -X POST "http://localhost:8000/validate/upload?return_format=json" \
-  -F "file=@sample_input.csv"
-```
+# Process a CSV file directly without prompts
+python main.py --non-interactive input.csv
 
-### Option 2: CLI Tool
+# With custom output path
+python main.py --non-interactive input.csv --output-csv custom_output.csv
 
-**Basic Usage:**
-```bash
-python -m event_validator.main input.csv --output-csv output_enriched.csv
-```
-
-### With Options
-
-```bash
-python -m event_validator.main input.csv \
+# With all options
+python main.py --non-interactive input.csv \
     --output-csv output_enriched.csv \
     --base-image-path /path/to/base/images \
     --gemini-api-key YOUR_API_KEY \
-    --acceptance-threshold 75 \
+    --groq-api-key YOUR_GROQ_KEY \
+    --acceptance-threshold 60 \
     --phash-threshold 5 \
     --log-level INFO
 ```
 
-### Command Line Arguments
+### Command Line Arguments (Non-Interactive Mode)
 
-- `input_csv` (required): Path to input CSV file
-- `--output-csv`: Path to output CSV (default: `{input}_enriched.csv`)
-- `--base-image-path`: Base directory for duplicate image detection
-- `--gemini-api-key`: Gemini API key (or set `GEMINI_API_KEY` env var)
-- `--acceptance-threshold`: Score threshold for acceptance (default: 75)
-- `--phash-threshold`: pHash Hamming distance threshold (default: 5)
-- `--log-level`: Logging level: DEBUG, INFO, WARNING, ERROR (default: INFO)
-- `--log-file`: Optional log file path
+- `--non-interactive`: Run in non-interactive mode (use command-line arguments instead of prompts)
+- `input_csv` (required in non-interactive mode): Path to input CSV file on the server filesystem
+- `--output-csv` (optional): Path to output CSV file. If not specified, saves to `./outputs/` with auto-generated filename
+- `--base-image-path` (optional): Base directory path for duplicate image detection
+- `--gemini-api-key` (optional): Gemini API key (or set GEMINI_API_KEY env var)
+- `--groq-api-key` (optional): Groq API key for fallback (or set GROQ_API_KEY env var)
+- `--acceptance-threshold` (optional): Acceptance threshold score (default: 60)
+- `--phash-threshold` (optional): pHash Hamming distance threshold for duplicates (default: 5)
+- `--log-level` (optional): Logging level - DEBUG, INFO, WARNING, ERROR (default: INFO)
+- `--log-file` (optional): Optional log file path
+
+**Note:** In interactive mode (default), the script will prompt for the input file path. All other settings use environment variables or defaults.
 
 ## Input CSV Format
 

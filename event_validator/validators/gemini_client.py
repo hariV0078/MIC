@@ -32,7 +32,10 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 # Global cache for Gemini API responses (keyed by content hash)
+# Cache structure: {cache_key: response_text}
 _gemini_response_cache: Dict[str, str] = {}
+# Cache for parsed validation results (to avoid re-parsing)
+_gemini_parsed_cache: Dict[str, Dict[str, Any]] = {}
 
 # Callback function to signal rate limit detection (set by app.py)
 _rate_limit_callback: Optional[Callable[[], None]] = None
@@ -90,12 +93,14 @@ class GeminiClient:
         else:
             logger.debug("Groq package not available for fallback")
     
-    def _get_cache_key(self, prompt: str, model: Optional[str] = None, image_hash: Optional[str] = None) -> str:
-        """Generate cache key for prompt, model, and optionally image hash."""
+    def _get_cache_key(self, prompt: str, model: Optional[str] = None, image_hash: Optional[str] = None, pdf_hash: Optional[str] = None) -> str:
+        """Generate cache key for prompt, model, and optionally image/pdf hash."""
         content = f"{model or self.text_model}:{prompt}"
         if image_hash:
-            content += f":{image_hash}"
-        return hashlib.md5(content.encode()).hexdigest()
+            content += f":img:{image_hash}"
+        if pdf_hash:
+            content += f":pdf:{pdf_hash}"
+        return hashlib.sha256(content.encode()).hexdigest()
     
     def _call_gemini(
         self,
@@ -138,25 +143,42 @@ class GeminiClient:
         else:
             model = model or self.text_model
         
-        # Check cache first
+        # Check cache first (with content hash for deterministic caching)
         image_hash = None
         if image_path and image_path.exists():
-            with open(image_path, 'rb') as f:
-                image_data = f.read()
-                image_hash = hashlib.md5(image_data).hexdigest()
+            # Compute image hash for cache key (use SHA256 for better cache hits)
+            try:
+                from event_validator.utils.hashing import compute_sha256
+                image_hash = compute_sha256(image_path)
+            except Exception as e:
+                logger.debug(f"Could not compute image hash for caching: {e}")
+                # Fallback to MD5 if SHA256 fails
+                try:
+                    with open(image_path, 'rb') as f:
+                        image_data = f.read()
+                        image_hash = hashlib.md5(image_data).hexdigest()
+                except Exception:
+                    pass
         
-        if use_cache:
-            cache_key = self._get_cache_key(prompt, model, image_hash)
+        if use_cache and image_hash:
+            cache_key = self._get_cache_key(prompt, model, image_hash=image_hash[:16])
             if cache_key in _gemini_response_cache:
-                logger.debug(f"Cache hit for prompt (model: {model})")
+                logger.debug(f"Cache hit for image analysis (model: {model})")
+                return _gemini_response_cache[cache_key]
+        elif use_cache and not image_path:
+            # Text-only call, check cache
+            cache_key = self._get_cache_key(prompt, model)
+            if cache_key in _gemini_response_cache:
+                logger.debug(f"Cache hit for text prompt (model: {model})")
                 return _gemini_response_cache[cache_key]
         
-        # Use smart rate limiter instead of fixed delay
-        # This calculates the exact delay needed based on recent request history
+        # Use smart rate limiter with token-aware delays
+        # This calculates the exact delay needed based on recent request history and token count
         rate_limiter = get_rate_limiter()
-        delay = rate_limiter.acquire(wait=True)
+        estimated_tokens = rate_limiter.estimate_tokens(prompt, has_image=(image_path is not None))
+        delay = rate_limiter.acquire(wait=True, estimated_tokens=estimated_tokens)
         if delay > 0:
-            logger.debug(f"Rate limiter applied {delay:.2f}s delay (current rate: {rate_limiter.get_current_rate():.1f} RPM)")
+            logger.debug(f"Rate limiter applied {delay:.2f}s delay (current rate: {rate_limiter.get_current_rate():.1f} RPM, tokens: ~{estimated_tokens})")
         
         for attempt in range(max_retries):
             try:
@@ -205,6 +227,7 @@ class GeminiClient:
                     if use_cache:
                         cache_key = self._get_cache_key(prompt, model, image_hash)
                         _gemini_response_cache[cache_key] = response_text
+                        logger.debug(f"Cached response with key: {cache_key[:16]}...")
                     return response_text
                 
                 return None
@@ -309,11 +332,14 @@ class GeminiClient:
         title: str,
         objectives: str,
         learning_outcomes: str,
-        theme: str
+        theme: str,
+        prefer_groq: bool = True
     ) -> bool:
         """
         Check if title, objectives, and learning outcomes align with theme.
         Returns True if aligned, False otherwise.
+        
+        ADAPTIVE ROUTING: Prefers Groq for text-based tasks to preserve Gemini quota for vision.
         """
         prompt = f"""You are a validation system. Determine if the following event details align with the specified theme.
 
@@ -327,6 +353,15 @@ Task: Determine if the title, objectives, and learning outcomes are semantically
 
 Respond with ONLY one word: "YES" if aligned, "NO" if not aligned."""
         
+        # Adaptive routing: Use Groq for text tasks if available and preferred
+        if prefer_groq and self.groq_client and hasattr(self.groq_client, 'check_theme_alignment'):
+            try:
+                logger.debug("Using Groq for theme alignment (text task, preserving Gemini quota)")
+                return self.groq_client.check_theme_alignment(title, objectives, learning_outcomes, theme)
+            except Exception as e:
+                logger.warning(f"Groq theme alignment failed, falling back to Gemini: {e}")
+        
+        # Fallback to Gemini
         response = self._call_gemini(prompt)
         if not response:
             logger.warning("Theme alignment check failed (Gemini and Groq fallback), defaulting to False")
@@ -391,6 +426,124 @@ PARTICIPANTS_VALID: YES or NO"""
                 results["learning_match"] = "YES" in line.upper()
             elif 'PARTICIPANTS_VALID:' in line:
                 results["participants_valid"] = "YES" in line.upper()
+        
+        return results
+    
+    def validate_pdf_comprehensive(
+        self,
+        pdf_text: str,
+        expected_title: Optional[str],
+        expected_objectives: Optional[str],
+        expected_learning_outcomes: Optional[str],
+        expected_participants: Optional[int],
+        pdf_hash: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        OPTIMIZED: Single unified PDF validation call that checks all 5 PDF rules at once.
+        This replaces 5 separate API calls with 1 call, providing ~3-4x speedup.
+        
+        Returns dict with keys:
+        - title_match: bool
+        - expert_details_present: bool
+        - learning_outcomes_align: bool
+        - objectives_match: bool
+        - participants_valid: bool
+        - reasoning: str
+        """
+        # Generate cache key using PDF content hash if provided
+        cache_key = None
+        if pdf_hash:
+            cache_key = self._get_cache_key(
+                f"pdf_validation:{expected_title}:{expected_objectives}:{expected_learning_outcomes}:{expected_participants}",
+                model=self.text_model,
+                pdf_hash=pdf_hash
+            )
+            # Check cache first (both raw response and parsed results)
+            if cache_key in _gemini_parsed_cache:
+                logger.debug("PDF validation cache hit (parsed results)")
+                return _gemini_parsed_cache[cache_key]
+            elif cache_key in _gemini_response_cache:
+                logger.debug("PDF validation cache hit (raw response)")
+                cached_response = _gemini_response_cache[cache_key]
+                parsed_results = self._parse_pdf_validation_response(cached_response)
+                _gemini_parsed_cache[cache_key] = parsed_results
+                return parsed_results
+        
+        results = {
+            "title_match": False,
+            "expert_details_present": False,
+            "learning_outcomes_align": False,
+            "objectives_match": False,
+            "participants_valid": False,
+            "reasoning": ""
+        }
+        
+        # Single comprehensive prompt for all PDF validations
+        prompt = f"""You are validating a PDF report for an event submission. Analyze the PDF text and return ALL validation results in a single response.
+
+PDF Text (first 4000 characters):
+{pdf_text[:4000]}
+
+Expected Metadata:
+- Title: {expected_title or 'Not specified'}
+- Objectives: {expected_objectives or 'Not specified'}
+- Learning Outcomes: {expected_learning_outcomes or 'Not specified'}
+- Expected Participants: {expected_participants or 'Not specified (needs 20+)'}
+
+Task: Validate ALL of the following in ONE analysis:
+1. Does the PDF title match the expected title? (fuzzy/semantic match acceptable)
+2. Are expert details present? (Look for: expert name, designation, affiliation, speaker, facilitator, resource person, keynote speaker, presenter)
+3. Do the learning outcomes in the PDF align with the expected learning outcomes? (semantic alignment)
+4. Do the objectives in the PDF match the expected objectives? (semantic alignment)
+5. Does the PDF contain participant information indicating 20+ participants? (Look for participant count, attendance, number of attendees)
+
+Respond in this EXACT format (one line per check):
+TITLE_MATCH: YES or NO
+EXPERT_DETAILS: YES or NO
+LEARNING_OUTCOMES_ALIGN: YES or NO
+OBJECTIVES_MATCH: YES or NO
+PARTICIPANTS_VALID: YES or NO
+REASONING: <brief explanation of your findings>"""
+        
+        response = self._call_gemini(prompt, use_cache=True)
+        if not response:
+            logger.warning("Comprehensive PDF validation failed (Gemini and Groq fallback)")
+            return results
+        
+        # Parse and cache the response
+        parsed_results = self._parse_pdf_validation_response(response)
+        if cache_key:
+            _gemini_response_cache[cache_key] = response
+            _gemini_parsed_cache[cache_key] = parsed_results
+            logger.debug(f"Cached PDF validation results with key: {cache_key[:16]}...")
+        
+        return parsed_results
+    
+    def _parse_pdf_validation_response(self, response: str) -> Dict[str, Any]:
+        """Parse the unified PDF validation response."""
+        results = {
+            "title_match": False,
+            "expert_details_present": False,
+            "learning_outcomes_align": False,
+            "objectives_match": False,
+            "participants_valid": False,
+            "reasoning": ""
+        }
+        
+        for line in response.split('\n'):
+            line = line.strip()
+            if 'TITLE_MATCH:' in line:
+                results["title_match"] = "YES" in line.upper()
+            elif 'EXPERT_DETAILS:' in line:
+                results["expert_details_present"] = "YES" in line.upper()
+            elif 'LEARNING_OUTCOMES_ALIGN:' in line:
+                results["learning_outcomes_align"] = "YES" in line.upper()
+            elif 'OBJECTIVES_MATCH:' in line:
+                results["objectives_match"] = "YES" in line.upper()
+            elif 'PARTICIPANTS_VALID:' in line:
+                results["participants_valid"] = "YES" in line.upper()
+            elif 'REASONING:' in line:
+                results["reasoning"] = line.split(':', 1)[1].strip() if ':' in line else ""
         
         return results
     

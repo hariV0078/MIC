@@ -51,7 +51,7 @@ class EventSubmission:
 @dataclass
 class ValidationConfig:
     """Configuration for validation rules."""
-    acceptance_threshold: int = 75
+    acceptance_threshold: int = 60
     duplicate_phash_threshold: int = 5  # Hamming distance threshold for pHash
     base_image_path: Optional[Path] = None
     groq_api_key: Optional[str] = None

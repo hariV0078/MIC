@@ -73,7 +73,10 @@ Returns API information and available endpoints.
   "message": "Event Validation System API",
   "version": "1.0.0",
   "endpoints": {
-    "POST /validate/upload": "Upload CSV/XLSX file for validation",
+    "POST /validate/file": "Process CSV/XLSX file from server filesystem",
+    "POST /validate/batch": "Validate batch of submissions from JSON",
+    "GET /download/{filename}": "Download generated validation results CSV",
+    "GET /downloads": "List all available output files",
     "GET /health": "Health check endpoint"
   }
 }
@@ -95,35 +98,23 @@ Check API health and configuration status.
 }
 ```
 
-### 3. Validate Upload (File Upload)
+### 3. Validate File (Process CSV from Server Filesystem)
 
-**POST** `/validate/upload`
+**POST** `/validate/file`
 
-Upload a CSV or XLSX file for validation.
+Process and validate a CSV or XLSX file that exists on the server filesystem. The file is read from the server, processed, and results are automatically saved to the `./outputs/` directory.
 
 **Parameters:**
-- `file` (form-data, required): CSV or XLSX file
-- `return_format` (query, optional): Response format - `json`, `csv`, or `xlsx` (default: `json`)
+- `file_path` (query, required): Path to CSV/XLSX file on server filesystem
 - `base_image_path` (query, optional): Base directory for duplicate detection
 - `gemini_api_key` (query, optional): Gemini API key (overrides env var)
-- `acceptance_threshold` (query, optional): Acceptance threshold (overrides default 75)
+- `acceptance_threshold` (query, optional): Acceptance threshold (overrides default 60)
 
 **Example using curl:**
 
 ```bash
-# JSON response
-curl -X POST "http://localhost:8000/validate/upload?return_format=json" \
-  -F "file=@sample_input.csv"
-
-# CSV response
-curl -X POST "http://localhost:8000/validate/upload?return_format=csv" \
-  -F "file=@sample_input.csv" \
-  -o results.csv
-
-# XLSX response
-curl -X POST "http://localhost:8000/validate/upload?return_format=xlsx" \
-  -F "file=@sample_input.xlsx" \
-  -o results.xlsx
+# Process file and get output file information
+curl -X POST "http://localhost:8000/validate/file?file_path=/path/to/sample_input.csv"
 ```
 
 **Example using Python requests:**
@@ -131,33 +122,117 @@ curl -X POST "http://localhost:8000/validate/upload?return_format=xlsx" \
 ```python
 import requests
 
-url = "http://localhost:8000/validate/upload"
-files = {"file": open("sample_input.csv", "rb")}
-params = {"return_format": "json"}
+url = "http://localhost:8000/validate/file"
+params = {
+    "file_path": "/path/to/sample_input.csv",
+    "acceptance_threshold": 60
+}
 
-response = requests.post(url, files=files, params=params)
-results = response.json()
-print(results)
+response = requests.post(url, params=params)
+result = response.json()
+print(f"Output file: {result['output_file']}")
+print(f"Download URL: {result['download_url']}")
 ```
 
-**Response (JSON format):**
+**Response:**
 ```json
-[
-  {
-    "Title": "Workshop on AI Ethics",
-    "Objectives": "To understand ethical implications of AI",
-    "Overall Score": 85,
-    "Status": "Accepted",
-    "Requirements Not Met": ""
-  },
-  {
-    "Title": "Data Science Bootcamp",
-    "Objectives": "Introduction to data science",
-    "Overall Score": 60,
-    "Status": "Rejected",
-    "Requirements Not Met": "Level Validation: Duration 6h maps to Level 3, but Level 2 selected; Participants reported: 15 (needs > 20)"
+{
+  "status": "success",
+  "message": "Processed 10 submissions successfully",
+  "input_file": "/path/to/sample_input.csv",
+  "output_file": "validation_results_sample_input_20250122_143022.csv",
+  "output_path": "./outputs/validation_results_sample_input_20250122_143022.csv",
+  "download_url": "/download/validation_results_sample_input_20250122_143022.csv",
+  "summary": {
+    "total_submissions": 10,
+    "accepted": 7,
+    "rejected": 2,
+    "reopen": 1,
+    "errors": 0
   }
-]
+}
+```
+
+**Error Responses:**
+
+- **404 File Not Found:**
+```json
+{
+  "detail": "File not found: /path/to/nonexistent.csv"
+}
+```
+
+- **400 Invalid File Format:**
+```json
+{
+  "detail": "Unsupported file format: .txt. Supported formats: .csv, .xlsx, .xls"
+}
+```
+
+- **400 Empty File:**
+```json
+{
+  "detail": "CSV file is empty: /path/to/empty.csv"
+}
+```
+
+### 4. Download Results File
+
+**GET** `/download/{filename}`
+
+Download a generated validation results CSV file from the outputs directory.
+
+**Parameters:**
+- `filename` (path, required): Name of the output CSV file to download
+
+**Example using curl:**
+
+```bash
+curl -X GET "http://localhost:8000/download/validation_results_sample_input_20250122_143022.csv" \
+  -o results.csv
+```
+
+**Example using Python requests:**
+
+```python
+import requests
+
+url = "http://localhost:8000/download/validation_results_sample_input_20250122_143022.csv"
+response = requests.get(url)
+
+with open("results.csv", "wb") as f:
+    f.write(response.content)
+```
+
+**Error Response (404):**
+```json
+{
+  "detail": "File not found: invalid_filename.csv. Use /downloads to list available files."
+}
+```
+
+### 5. List Available Downloads
+
+**GET** `/downloads`
+
+List all available output CSV files in the outputs directory.
+
+**Response:**
+```json
+{
+  "status": "success",
+  "output_directory": "/opt/MIC/outputs",
+  "file_count": 3,
+  "files": [
+    {
+      "filename": "validation_results_sample_input_20250122_143022.csv",
+      "size_bytes": 15234,
+      "size_mb": 0.01,
+      "modified": "2025-01-22T14:30:22",
+      "download_url": "/download/validation_results_sample_input_20250122_143022.csv"
+    }
+  ]
+}
 ```
 
 ### 4. Validate Batch (JSON)
@@ -248,11 +323,20 @@ The response includes all original columns plus:
 
 The API returns appropriate HTTP status codes:
 
-- `200 OK`: Successful validation
-- `400 Bad Request`: Invalid file format or empty file
-- `500 Internal Server Error`: Processing error
+- `200 OK`: Successful validation or file download
+- `400 Bad Request`: Invalid file format, empty file, or invalid CSV format
+- `404 Not Found`: File not found (input file or output file for download)
+- `500 Internal Server Error`: Processing error or file I/O error
 
 Errors in individual submissions are captured in the `Status` field as "Error" with details in `Requirements Not Met`.
+
+### Common Error Scenarios
+
+1. **File Not Found (404)**: The input file path doesn't exist on the server
+2. **Invalid File Format (400)**: File extension is not .csv, .xlsx, or .xls
+3. **Empty File (400)**: The CSV/Excel file has no data rows
+4. **Invalid CSV Format (400)**: The CSV file cannot be parsed (malformed)
+5. **Processing Error (500)**: An error occurred during validation processing
 
 ## CORS Configuration
 
