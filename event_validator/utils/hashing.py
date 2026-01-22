@@ -2,7 +2,7 @@
 import hashlib
 import io
 from pathlib import Path
-from typing import Optional, Union
+from typing import Optional, Union, List, Tuple
 import logging
 
 try:
