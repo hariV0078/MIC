@@ -21,6 +21,7 @@ from event_validator.validators.gemini_client import GeminiClient
 from event_validator.config.rules import ACCEPTANCE_THRESHOLD
 from event_validator.utils.column_mapper import map_row_to_standard_format
 from event_validator.utils.downloader import download_pdf, download_image
+from event_validator.utils.file_operations import read_csv_from_path
 
 logger = logging.getLogger(__name__)
 
@@ -436,20 +437,20 @@ def process_csv(
     if not gemini_client.client:
         logger.warning("Gemini client not initialized. Some validations may fail.")
     
-    # Read input CSV
+    # Read input file (CSV or Excel)
     if not input_csv_path.exists():
-        raise FileNotFoundError(f"Input CSV not found: {input_csv_path}")
+        raise FileNotFoundError(f"Input file not found: {input_csv_path}")
     
-    rows = []
-    fieldnames = []
+    # Use file_operations to read CSV or Excel files
+    logger.info(f"Reading input file: {input_csv_path.name}")
+    df = read_csv_from_path(str(input_csv_path))
     
-    with open(input_csv_path, 'r', encoding='utf-8', newline='') as f:
-        reader = csv.DictReader(f)
-        fieldnames = reader.fieldnames or []
-        rows = list(reader)
+    # Convert DataFrame to list of dictionaries
+    rows = df.to_dict('records')
+    fieldnames = list(df.columns)
     
     logger.info("=" * 80)
-    logger.info(f"CSV PROCESSING STARTED | Input: {input_csv_path.name} | Rows: {len(rows)} | Start Time: {csv_start_datetime}")
+    logger.info(f"FILE PROCESSING STARTED | Input: {input_csv_path.name} | Rows: {len(rows)} | Start Time: {csv_start_datetime}")
     logger.info("=" * 80)
     
     # Reset batch hash tracker at start of new batch
@@ -507,7 +508,7 @@ def process_csv(
     avg_time_per_submission = csv_elapsed_time / len(enriched_rows) if enriched_rows else 0
     
     logger.info("=" * 80)
-    logger.info(f"CSV PROCESSING COMPLETED | Output: {output_csv_path.name} | Rows processed: {len(enriched_rows)}")
+    logger.info(f"FILE PROCESSING COMPLETED | Output: {output_csv_path.name} | Rows processed: {len(enriched_rows)}")
     logger.info(f"Start Time: {csv_start_datetime} | End Time: {csv_end_datetime}")
     if csv_elapsed_minutes > 0:
         logger.info(f"Total Time: {csv_elapsed_minutes}m {csv_elapsed_seconds:.2f}s ({csv_elapsed_time:.2f} seconds)")

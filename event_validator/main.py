@@ -187,7 +187,7 @@ Examples:
         'input_csv',
         type=str,
         nargs='?',
-        help='Path to input CSV file (required in non-interactive mode)'
+        help='Path to input CSV or Excel file (required in non-interactive mode)'
     )
     parser.add_argument(
         '--output-csv',
@@ -253,7 +253,7 @@ Examples:
         print_section("Configuration")
         
         # Prompt for input file path
-        input_csv_str = prompt_input("Enter the input CSV file path", file_type="file")
+        input_csv_str = prompt_input("Enter the input CSV or Excel file path", file_type="file")
         input_csv = Path(input_csv_str)
         
         # Use default output location (./outputs/)
