@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import List, Optional
 import csv
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from event_validator.types import EventSubmission, ValidationConfig, ValidationResult
 from event_validator.extractors.pdf_extractor import extract_pdf_text
@@ -20,7 +21,7 @@ from event_validator.validators.duplicate_validator import (
 from event_validator.validators.gemini_client import GeminiClient
 from event_validator.config.rules import ACCEPTANCE_THRESHOLD
 from event_validator.utils.column_mapper import map_row_to_standard_format
-from event_validator.utils.downloader import download_pdf, download_image
+from event_validator.utils.downloader import download_pdf, download_image, cleanup_all_files, DOWNLOAD_DIR
 from event_validator.utils.file_operations import read_csv_from_path
 
 logger = logging.getLogger(__name__)
@@ -427,6 +428,14 @@ def process_csv(
     csv_start_time = time.time()
     csv_start_datetime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
+    # Clear downloaded_files directory at the start of new processing
+    logger.info("Clearing downloaded_files directory for new processing run...")
+    deleted_count = cleanup_all_files()
+    if deleted_count > 0:
+        logger.info(f"Cleared {deleted_count} file(s) from downloaded_files directory")
+    else:
+        logger.info("downloaded_files directory is already empty")
+    
     # Initialize Gemini client with Groq fallback
     if gemini_api_key is None:
         gemini_api_key = config.gemini_api_key if hasattr(config, 'gemini_api_key') else config.groq_api_key
@@ -456,33 +465,68 @@ def process_csv(
     # Reset batch hash tracker at start of new batch
     reset_batch_hash_tracker()
     
-    # Process each row
-    enriched_rows = []
-    for i, row in enumerate(rows, 1):
-        logger.info(f"Processing submission {i}/{len(rows)}")
+    # Process rows in parallel for better performance
+    # Use optimal number of workers based on API rate limits
+    max_workers = min(int(os.getenv('DEFAULT_MAX_WORKERS', '3')), len(rows))
+    logger.info(f"Processing {len(rows)} submissions with {max_workers} parallel workers")
+    
+    enriched_rows = [None] * len(rows)  # Pre-allocate list to maintain order
+    
+    def process_single_row(row_data: dict, index: int) -> tuple[int, dict]:
+        """Process a single row and return its index and result."""
         try:
-            submission = process_submission(row, config, gemini_client)
+            submission = process_submission(row_data, config, gemini_client)
             
             # Create enriched row (use original row data)
-            enriched_row = getattr(submission, '_original_row_data', row).copy()
+            enriched_row = getattr(submission, '_original_row_data', row_data).copy()
             enriched_row['Overall Score'] = str(submission.overall_score)
             enriched_row['Status'] = submission.status
             enriched_row['Requirements Not Met'] = submission.requirements_not_met
             
-            enriched_rows.append(enriched_row)
-            
             logger.info(
-                f"Submission {i}: Score={submission.overall_score}, "
+                f"Submission {index + 1}/{len(rows)}: Score={submission.overall_score}, "
                 f"Status={submission.status}"
             )
+            
+            return (index, enriched_row)
         except Exception as e:
-            logger.error(f"Error processing submission {i}: {e}", exc_info=True)
+            logger.error(f"Error processing submission {index + 1}: {e}", exc_info=True)
             # Add row with error status
-            enriched_row = row.copy()
+            enriched_row = row_data.copy()
             enriched_row['Overall Score'] = "0"
             enriched_row['Status'] = "Error"
             enriched_row['Requirements Not Met'] = f"Processing error: {str(e)}"
-            enriched_rows.append(enriched_row)
+            return (index, enriched_row)
+    
+    # Process in parallel
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # Submit all tasks
+        future_to_index = {
+            executor.submit(process_single_row, row, i): i 
+            for i, row in enumerate(rows)
+        }
+        
+        # Collect results as they complete
+        completed = 0
+        for future in as_completed(future_to_index):
+            completed += 1
+            try:
+                index, enriched_row = future.result()
+                enriched_rows[index] = enriched_row
+                if completed % 10 == 0 or completed == len(rows):
+                    logger.info(f"Progress: {completed}/{len(rows)} submissions completed")
+            except Exception as e:
+                original_index = future_to_index[future]
+                logger.error(f"Unexpected error processing submission {original_index + 1}: {e}", exc_info=True)
+                # Create error row
+                error_row = rows[original_index].copy()
+                error_row['Overall Score'] = "0"
+                error_row['Status'] = "Error"
+                error_row['Requirements Not Met'] = f"Unexpected error: {str(e)}"
+                enriched_rows[original_index] = error_row
+    
+    # Filter out any None values (shouldn't happen, but safety check)
+    enriched_rows = [row for row in enriched_rows if row is not None]
     
     # Write output CSV with proper field ordering
     # Ensure required fields are always present
