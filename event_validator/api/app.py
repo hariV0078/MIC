@@ -317,6 +317,7 @@ async def validate_upload(
                     result_row = getattr(submission, '_original_row_data', row).copy()
                     result_row['Overall Score'] = submission.overall_score
                     result_row['Status'] = submission.status
+                    result_row['Requirements Not Met'] = submission.requirements_not_met
                     results.append(result_row)
                 except Exception as e:
                     logger.error(f"Error processing submission {i + 1}: {e}", exc_info=True)
@@ -324,6 +325,7 @@ async def validate_upload(
                     result_row = row.copy()
                     result_row['Overall Score'] = 0
                     result_row['Status'] = "Error"
+                    result_row['Requirements Not Met'] = f"Processing error: {str(e)}"
                     results.append(result_row)
         else:
             # Process submissions in parallel with rate limiting
@@ -345,6 +347,7 @@ async def validate_upload(
                         result_row = getattr(submission, '_original_row_data', row_data).copy()
                         result_row['Overall Score'] = submission.overall_score
                         result_row['Status'] = submission.status
+                        result_row['Requirements Not Met'] = submission.requirements_not_met
                         
                         return row_index, result_row
                     except Exception as e:
@@ -359,6 +362,7 @@ async def validate_upload(
                         result_row = row_data.copy()
                         result_row['Overall Score'] = 0
                         result_row['Status'] = "Error"
+                        result_row['Requirements Not Met'] = f"Processing error: {str(e)}"
                         return row_index, result_row
             
             # Process submissions in parallel using ThreadPoolExecutor
@@ -388,6 +392,7 @@ async def validate_upload(
                         error_row = rows[original_index].copy()
                         error_row['Overall Score'] = 0
                         error_row['Status'] = "Error"
+                        error_row['Requirements Not Met'] = f"Processing error: {str(e)}"
                         indexed_results[original_index] = error_row
                 
                 # Reconstruct results in original order
@@ -401,6 +406,8 @@ async def validate_upload(
             results_df['Overall Score'] = 0
         if 'Status' not in results_df.columns:
             results_df['Status'] = 'Error'
+        if 'Requirements Not Met' not in results_df.columns:
+            results_df['Requirements Not Met'] = ''
         
         # Convert Overall Score to integer for consistency
         results_df['Overall Score'] = pd.to_numeric(results_df['Overall Score'], errors='coerce').fillna(0).astype(int)
@@ -507,6 +514,7 @@ async def validate_batch(
                     result_row = getattr(submission, '_original_row_data', row).copy()
                     result_row['Overall Score'] = submission.overall_score
                     result_row['Status'] = submission.status
+                    result_row['Requirements Not Met'] = submission.requirements_not_met
                     results.append(result_row)
                 except Exception as e:
                     logger.error(f"Error processing submission {i + 1}: {e}", exc_info=True)
@@ -514,6 +522,7 @@ async def validate_batch(
                     result_row = row.copy()
                     result_row['Overall Score'] = 0
                     result_row['Status'] = "Error"
+                    result_row['Requirements Not Met'] = f"Processing error: {str(e)}"
                     results.append(result_row)
         else:
             # Process submissions in parallel with rate limiting
@@ -535,6 +544,7 @@ async def validate_batch(
                         result_row = getattr(submission, '_original_row_data', row_data).copy()
                         result_row['Overall Score'] = submission.overall_score
                         result_row['Status'] = submission.status
+                        result_row['Requirements Not Met'] = submission.requirements_not_met
                         
                         return row_index, result_row
                     except Exception as e:
@@ -549,6 +559,7 @@ async def validate_batch(
                         result_row = row_data.copy()
                         result_row['Overall Score'] = 0
                         result_row['Status'] = "Error"
+                        result_row['Requirements Not Met'] = f"Processing error: {str(e)}"
                         return row_index, result_row
             
             # Process submissions in parallel using ThreadPoolExecutor
@@ -578,6 +589,7 @@ async def validate_batch(
                         error_row = submissions[original_index].copy()
                         error_row['Overall Score'] = 0
                         error_row['Status'] = "Error"
+                        error_row['Requirements Not Met'] = f"Processing error: {str(e)}"
                         indexed_results[original_index] = error_row
                 
                 # Reconstruct results in original order
@@ -591,6 +603,8 @@ async def validate_batch(
             results_df['Overall Score'] = 0
         if 'Status' not in results_df.columns:
             results_df['Status'] = 'Error'
+        if 'Requirements Not Met' not in results_df.columns:
+            results_df['Requirements Not Met'] = ''
         
         # Convert Overall Score to integer for consistency
         results_df['Overall Score'] = pd.to_numeric(results_df['Overall Score'], errors='coerce').fillna(0).astype(int)
