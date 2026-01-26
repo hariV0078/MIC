@@ -62,11 +62,13 @@ _gemini_client: Optional[GeminiClient] = None
 from event_validator.utils.rate_limiter import get_rate_limiter
 
 # Calculate optimal concurrency based on rate limits
-# Default: 15 RPM for Gemini free tier
-GEMINI_RPM = int(os.getenv('GEMINI_RPM_LIMIT', '15'))
+# Default: 150 RPM for gemini-2.5-pro (10K RPD capacity)
+# gemini-2.0-flash-exp has only 10 RPM and 500 RPD (too restrictive)
+GEMINI_RPM = int(os.getenv('GEMINI_RPM_LIMIT', '150'))
 # Use 80% of capacity for parallel processing (allows burst)
-# Each submission needs ~4-5 API calls, so we can process more submissions concurrently
-OPTIMAL_CONCURRENCY = max(2, int((GEMINI_RPM * 0.8) / 4))  # ~3 workers for 15 RPM
+# Each submission needs ~3-4 API calls, so we can process more submissions concurrently
+OPTIMAL_CONCURRENCY = max(10, int((GEMINI_RPM * 0.8) / 4))  # ~30 workers for 150 RPM, but cap at 12 for safety
+OPTIMAL_CONCURRENCY = min(12, OPTIMAL_CONCURRENCY)  # Cap at 12 workers to avoid overwhelming
 MAX_CONCURRENT_API_CALLS = OPTIMAL_CONCURRENCY * 2  # Allow more API calls since rate limiter handles it
 _api_semaphore = threading.Semaphore(MAX_CONCURRENT_API_CALLS)
 

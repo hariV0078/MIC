@@ -159,8 +159,9 @@ def get_rate_limiter() -> TokenBucketRateLimiter:
     with _rate_limiter_lock:
         if _global_rate_limiter is None:
             import os
-            # Default to 15 RPM for Gemini free tier, but allow override
-            requests_per_minute = int(os.getenv('GEMINI_RPM_LIMIT', '15'))
+            # Default to 150 RPM for gemini-2.5-pro (10K RPD), but allow override
+            # gemini-2.0-flash-exp has only 10 RPM and 500 RPD (too restrictive for large batches)
+            requests_per_minute = int(os.getenv('GEMINI_RPM_LIMIT', '150'))
             safety_factor = float(os.getenv('RATE_LIMIT_SAFETY_FACTOR', '0.9'))
             _global_rate_limiter = TokenBucketRateLimiter(
                 requests_per_minute=requests_per_minute,

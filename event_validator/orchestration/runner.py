@@ -467,7 +467,8 @@ def process_csv(
     
     # Process rows in parallel for better performance
     # Use optimal number of workers based on API rate limits
-    max_workers = min(int(os.getenv('DEFAULT_MAX_WORKERS', '3')), len(rows))
+    # Default increased to 10-12 for gemini-2.5-pro (150 RPM capacity)
+    max_workers = min(int(os.getenv('DEFAULT_MAX_WORKERS', '10')), len(rows))
     logger.info(f"Processing {len(rows)} submissions with {max_workers} parallel workers")
     
     enriched_rows = [None] * len(rows)  # Pre-allocate list to maintain order
