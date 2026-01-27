@@ -207,13 +207,17 @@ def process_submission(
     # Start timing for this submission
     submission_start_time = time.time()
     
-    # Run validations
-    all_results: List[ValidationResult] = []
-    
-    # Get submission ID for logging
+    # Get submission ID for logging (needed for budget tracking)
     original_data = getattr(submission, '_original_row_data', submission.row_data)
     submission_id = str(original_data.get('id', original_data.get('eventId', 'unknown')))
     submission_title = original_data.get('activity_name', 'Unknown Event')
+    
+    # Initialize request budget for this submission
+    from event_validator.utils.request_budget import get_budget
+    budget = get_budget(submission_id)
+    
+    # Run validations
+    all_results: List[ValidationResult] = []
     
     logger.info("=" * 80)
     logger.info(f"VALIDATION START | Submission ID: {submission_id} | Title: {submission_title}")
@@ -230,11 +234,30 @@ def process_submission(
     duplicate_points = 0
     duplicate_results = []
     
+    # Removed stagger delay - rate limiter handles spacing automatically
+    # With 4 concurrent calls and 145 RPM, no need for additional delays
+    
     # Theme validation
     logger.info("─" * 80)
     logger.info("THEME VALIDATION (33 points total - Year alignment disabled)")
     logger.info("─" * 80)
-    theme_results = validate_theme(submission, gemini_client)
+    
+    # Check budget before theme validation (1 API call)
+    if not budget.can_make_call("theme_alignment"):
+        logger.warning(f"Budget exhausted before theme validation. Skipping API call.")
+        # Create failure result
+        from event_validator.config.rules import THEME_RULES
+        rule_name, points = THEME_RULES[0]
+        theme_results = [ValidationResult(
+            criterion=rule_name,
+            passed=False,
+            points_awarded=0,
+            message="Theme validation skipped: API call budget exhausted"
+        )]
+    else:
+        theme_results = validate_theme(submission, gemini_client)
+        # Record API call (theme validation makes 1 call)
+        budget.record_call("theme_alignment", success=True)
     all_results.extend(theme_results)
     
     # Log theme validation results
@@ -253,7 +276,23 @@ def process_submission(
     logger.info("PDF VALIDATION (25 points total)")
     logger.info("─" * 80)
     if submission.pdf_data:
-        pdf_results = validate_pdf(submission, gemini_client)
+        # Check budget before PDF validation (1 API call)
+        if not budget.can_make_call("pdf_validation"):
+            logger.warning(f"Budget exhausted before PDF validation. Skipping API call.")
+            # Create failure results
+            from event_validator.config.rules import PDF_RULES
+            pdf_results = []
+            for rule_name, points in PDF_RULES:
+                pdf_results.append(ValidationResult(
+                    criterion=rule_name,
+                    passed=False,
+                    points_awarded=0,
+                    message="PDF validation skipped: API call budget exhausted"
+                ))
+        else:
+            pdf_results = validate_pdf(submission, gemini_client)
+            # Record API call (PDF validation makes 1 unified call)
+            budget.record_call("pdf_validation", success=True)
         all_results.extend(pdf_results)
         
         # Log PDF validation results
@@ -289,7 +328,23 @@ def process_submission(
     logger.info("IMAGE VALIDATION (14 points total - Geotag validation disabled)")
     logger.info("─" * 80)
     if submission.images:
-        image_results = validate_images(submission, gemini_client)
+        # Check budget before image validation (1 API call per image, but we use first image)
+        if not budget.can_make_call("image_validation"):
+            logger.warning(f"Budget exhausted before image validation. Skipping API call.")
+            # Create failure results
+            from event_validator.config.rules import IMAGE_RULES
+            image_results = []
+            for rule_name, points in IMAGE_RULES:
+                image_results.append(ValidationResult(
+                    criterion=rule_name,
+                    passed=False,
+                    points_awarded=0,
+                    message="Image validation skipped: API call budget exhausted"
+                ))
+        else:
+            image_results = validate_images(submission, gemini_client)
+            # Record API call (image validation makes 1 call per image, but optimized to 1)
+            budget.record_call("image_validation", success=True)
         all_results.extend(image_results)
         
         # Log image validation results
@@ -436,6 +491,12 @@ def process_csv(
     else:
         logger.info("downloaded_files directory is already empty")
     
+    # Reset circuit breakers to ensure fresh state for each run
+    from event_validator.utils.circuit_breaker import reset_gemini_circuit_breaker, reset_groq_circuit_breaker
+    reset_gemini_circuit_breaker()
+    reset_groq_circuit_breaker()
+    logger.info("Circuit breakers reset for new processing run")
+    
     # Initialize Gemini client with Groq fallback
     if gemini_api_key is None:
         gemini_api_key = config.gemini_api_key if hasattr(config, 'gemini_api_key') else config.groq_api_key
@@ -466,10 +527,11 @@ def process_csv(
     reset_batch_hash_tracker()
     
     # Process rows in parallel for better performance
-    # Use optimal number of workers based on API rate limits
-    # Default increased to 10-12 for gemini-2.5-pro (150 RPM capacity)
-    max_workers = min(int(os.getenv('DEFAULT_MAX_WORKERS', '10')), len(rows))
-    logger.info(f"Processing {len(rows)} submissions with {max_workers} parallel workers")
+    # Optimized for 8-minute target: 8 workers × 4 concurrent Gemini calls = 32 concurrent API calls
+    # With 145 RPM (138 effective after 95% safety), this provides maximum throughput
+    max_workers = min(int(os.getenv('DEFAULT_MAX_WORKERS', '8')), len(rows))
+    from event_validator.utils.concurrency import GEMINI_MAX_CONCURRENT
+    logger.info(f"Processing {len(rows)} submissions with {max_workers} parallel workers (Gemini concurrency: {GEMINI_MAX_CONCURRENT})")
     
     enriched_rows = [None] * len(rows)  # Pre-allocate list to maintain order
     

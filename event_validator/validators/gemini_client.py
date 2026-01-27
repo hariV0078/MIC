@@ -5,9 +5,13 @@ import os
 import time
 import re
 import hashlib
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed, Future
 from pathlib import Path
 from dotenv import load_dotenv
 from event_validator.utils.rate_limiter import get_rate_limiter
+from event_validator.utils.circuit_breaker import get_gemini_circuit_breaker
+from event_validator.utils.concurrency import gemini_concurrency_guard
 
 # Load environment variables from .env file
 load_dotenv()
@@ -172,45 +176,76 @@ class GeminiClient:
                 logger.debug(f"Cache hit for text prompt (model: {model})")
                 return _gemini_response_cache[cache_key]
         
+        # Check circuit breaker before making request
+        circuit_breaker = get_gemini_circuit_breaker()
+        if not circuit_breaker.can_proceed():
+            logger.warning("Circuit breaker OPEN: Gemini API temporarily unavailable")
+            # Try Groq fallback if available
+            if self.groq_client and hasattr(self.groq_client, '_call_groq') and not image_path:
+                logger.info("Attempting Groq fallback due to Gemini circuit breaker")
+                groq_response = self.groq_client._call_groq(prompt, use_cache=use_cache)
+                if groq_response:
+                    return groq_response
+            return None
+        
+        # Note: Removed fixed 5-second delay - rate limiter handles spacing automatically
+        # With 120 RPM (80% of 150), rate limiter enforces proper spacing (0.5s minimum between requests)
+        
         # Use smart rate limiter with token-aware delays
         # This calculates the exact delay needed based on recent request history and token count
         rate_limiter = get_rate_limiter()
         estimated_tokens = rate_limiter.estimate_tokens(prompt, has_image=(image_path is not None))
         delay = rate_limiter.acquire(wait=True, estimated_tokens=estimated_tokens)
         if delay > 0:
-            logger.debug(f"Rate limiter applied {delay:.2f}s delay (current rate: {rate_limiter.get_current_rate():.1f} RPM, tokens: ~{estimated_tokens})")
+            logger.debug(f"Rate limiter applied additional {delay:.2f}s delay (current rate: {rate_limiter.get_current_rate():.1f} RPM, tokens: ~{estimated_tokens})")
         
         for attempt in range(max_retries):
+            # CIRCUIT-AWARE RETRY: Check circuit breaker before each retry attempt
+            if attempt > 0 and not circuit_breaker.can_proceed():
+                logger.warning(f"Circuit breaker OPEN during retry - aborting Gemini retries")
+                # Try Groq fallback immediately instead of retrying
+                if self.groq_client and hasattr(self.groq_client, '_call_groq') and not image_path:
+                    logger.info("Attempting Groq fallback due to circuit breaker (mid-retry)")
+                    groq_response = self.groq_client._call_groq(prompt, use_cache=use_cache)
+                    if groq_response:
+                        return groq_response
+                return None
+            
             try:
-                # Prepare content parts
-                parts = [types.Part.from_text(text=prompt)]
-                
-                # Add image if provided
-                if image_path and image_path.exists():
-                    with open(image_path, 'rb') as image_file:
-                        image_data = image_file.read()
+                # CRITICAL: Use concurrency semaphore to limit parallel Gemini calls
+                # This prevents burst 429s even with multiple workers
+                with gemini_concurrency_guard():
+                    # No additional delay needed here - already applied before rate limiter
                     
-                    # Determine MIME type from file extension
-                    image_ext = image_path.suffix.lower()
-                    mime_type_map = {
-                        '.jpg': 'image/jpeg',
-                        '.jpeg': 'image/jpeg',
-                        '.png': 'image/png',
-                        '.gif': 'image/gif',
-                        '.webp': 'image/webp'
-                    }
-                    mime_type = mime_type_map.get(image_ext, 'image/jpeg')
+                    # Prepare content parts
+                    parts = [types.Part.from_text(text=prompt)]
                     
-                    parts.append(types.Part.from_bytes(data=image_data, mime_type=mime_type))
+                    # Add image if provided
+                    if image_path and image_path.exists():
+                        with open(image_path, 'rb') as image_file:
+                            image_data = image_file.read()
+                        
+                        # Determine MIME type from file extension
+                        image_ext = image_path.suffix.lower()
+                        mime_type_map = {
+                            '.jpg': 'image/jpeg',
+                            '.jpeg': 'image/jpeg',
+                            '.png': 'image/png',
+                            '.gif': 'image/gif',
+                            '.webp': 'image/webp'
+                        }
+                        mime_type = mime_type_map.get(image_ext, 'image/jpeg')
+                        
+                        parts.append(types.Part.from_bytes(data=image_data, mime_type=mime_type))
+                    
+                    contents = [types.Content(role="user", parts=parts)]
+                    
+                    response = self.client.models.generate_content(
+                        model=model,
+                        contents=contents,
+                    )
                 
-                contents = [types.Content(role="user", parts=parts)]
-                
-                response = self.client.models.generate_content(
-                    model=model,
-                    contents=contents,
-                )
-                
-                # Extract text from response
+                # Extract text from response (outside semaphore)
                 response_text = ""
                 if hasattr(response, 'text'):
                     response_text = response.text
@@ -223,6 +258,8 @@ class GeminiClient:
                 
                 if response_text:
                     response_text = response_text.strip()
+                    # Record success in circuit breaker
+                    circuit_breaker.record_success()
                     # Cache response
                     if use_cache:
                         cache_key = self._get_cache_key(prompt, model, image_hash)
@@ -245,6 +282,18 @@ class GeminiClient:
                 )
                 
                 if is_rate_limit:
+                    # Record error in circuit breaker
+                    circuit_breaker.record_error(is_rate_limit=True)
+                    
+                    # CIRCUIT-AWARE: If circuit just opened, don't retry - fallback immediately
+                    if not circuit_breaker.can_proceed():
+                        logger.warning("Circuit breaker OPEN after 429 - skipping retries, falling back")
+                        if self.groq_client and hasattr(self.groq_client, '_call_groq') and not image_path:
+                            groq_response = self.groq_client._call_groq(prompt, use_cache=use_cache)
+                            if groq_response:
+                                return groq_response
+                        return None
+                    
                     # Signal rate limit detection to app.py
                     if _rate_limit_callback:
                         try:
@@ -263,14 +312,17 @@ class GeminiClient:
                         )
                         time.sleep(delay)
                     else:
-                        # Exponential backoff: 5s, 10s, 20s (max 60s)
-                        # Base delay of 5 seconds for Gemini free tier (15 RPM)
-                        delay = min(5 * (2 ** attempt), 60)  # 5s, 10s, 20s, max 60s
+                        # Exponential backoff: base * (2^attempt), max 60 seconds
+                        base_delay = 2.0  # Start at 2s for Gemini
+                        delay = min(base_delay * (2 ** attempt), 60)
                         logger.warning(
                             f"Rate limit hit. Waiting {delay:.1f}s before retry "
                             f"(attempt {attempt + 1}/{max_retries})"
                         )
                         time.sleep(delay)
+                    
+                    # Re-acquire rate limiter after waiting
+                    rate_limiter.acquire(wait=True, estimated_tokens=estimated_tokens)
                 else:
                     logger.warning(f"Gemini API call failed (attempt {attempt + 1}/{max_retries}): {e}")
                     # Small delay before retry for non-rate-limit errors
@@ -333,13 +385,14 @@ class GeminiClient:
         objectives: str,
         learning_outcomes: str,
         theme: str,
-        prefer_groq: bool = True
+        prefer_groq: bool = False
     ) -> bool:
         """
         Check if title, objectives, and learning outcomes align with theme.
         Returns True if aligned, False otherwise.
         
-        ADAPTIVE ROUTING: Prefers Groq for text-based tasks to preserve Gemini quota for vision.
+        OPTIMIZED: Uses Gemini by default (150 RPM) for better throughput.
+        Parallel fallback: If Gemini fails, tries both Gemini retry and Groq simultaneously.
         """
         prompt = f"""You are a validation system. Determine if the following event details align with the specified theme.
 
@@ -353,21 +406,64 @@ Task: Determine if the title, objectives, and learning outcomes are semantically
 
 Respond with ONLY one word: "YES" if aligned, "NO" if not aligned."""
         
-        # Adaptive routing: Use Groq for text tasks if available and preferred
-        if prefer_groq and self.groq_client and hasattr(self.groq_client, 'check_theme_alignment'):
+        # Primary: Try Gemini first
+        response = self._call_gemini(prompt, use_cache=True)
+        if response:
+            return "YES" in response.upper()
+        
+        # Fallback: If Gemini fails, try both Gemini retry and Groq simultaneously
+        logger.warning("Gemini theme alignment failed, attempting parallel fallback (Gemini retry + Groq)")
+        
+        def try_gemini_retry() -> Optional[str]:
+            """Retry Gemini call."""
             try:
-                logger.debug("Using Groq for theme alignment (text task, preserving Gemini quota)")
+                return self._call_gemini(prompt, use_cache=False)  # Don't use cache on retry
+            except Exception as e:
+                logger.debug(f"Gemini retry failed: {e}")
+                return None
+        
+        def try_groq() -> Optional[bool]:
+            """Try Groq as fallback."""
+            if not self.groq_client or not hasattr(self.groq_client, 'check_theme_alignment'):
+                return None
+            try:
+                logger.debug("Trying Groq as parallel fallback")
                 return self.groq_client.check_theme_alignment(title, objectives, learning_outcomes, theme)
             except Exception as e:
-                logger.warning(f"Groq theme alignment failed, falling back to Gemini: {e}")
+                logger.debug(f"Groq fallback failed: {e}")
+                return None
         
-        # Fallback to Gemini
-        response = self._call_gemini(prompt)
-        if not response:
-            logger.warning("Theme alignment check failed (Gemini and Groq fallback), defaulting to False")
-            return False
+        # Execute both fallbacks in parallel
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = {
+                executor.submit(try_gemini_retry): 'gemini',
+                executor.submit(try_groq): 'groq'
+            }
+            
+            # Wait for first successful response
+            for future in as_completed(futures):
+                source = futures[future]
+                try:
+                    result = future.result(timeout=30)  # 30 second timeout per call
+                    if result is not None:
+                        if source == 'gemini':
+                            # Gemini returns string response
+                            if isinstance(result, str) and result:
+                                aligned = "YES" in result.upper()
+                                logger.info(f"Theme alignment: Gemini retry succeeded")
+                                return aligned
+                        elif source == 'groq':
+                            # Groq returns boolean directly
+                            if isinstance(result, bool):
+                                logger.info(f"Theme alignment: Groq fallback succeeded")
+                                return result
+                except Exception as e:
+                    logger.debug(f"Fallback call from {source} failed: {e}")
+                    continue
         
-        return "YES" in response.upper()
+        # If all fallbacks failed
+        logger.warning("All theme alignment checks failed (Gemini primary, Gemini retry, Groq fallback), defaulting to False")
+        return False
     
     def check_pdf_consistency(
         self,

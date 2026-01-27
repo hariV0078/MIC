@@ -6,8 +6,12 @@ import time
 import re
 import base64
 import hashlib
+import threading
 from pathlib import Path
 from dotenv import load_dotenv
+from event_validator.utils.rate_limiter import get_groq_rate_limiter
+from event_validator.utils.circuit_breaker import get_groq_circuit_breaker
+from event_validator.utils.concurrency import groq_concurrency_guard
 
 # Load environment variables from .env file
 load_dotenv()
@@ -21,6 +25,9 @@ logger = logging.getLogger(__name__)
 
 # Global cache for Groq API responses (keyed by content hash)
 _groq_response_cache: Dict[str, str] = {}
+
+# Note: Concurrency control moved to utils/concurrency.py with groq_concurrency_guard
+# Default GROQ_MAX_CONCURRENT is now 1 to prevent burst 429s
 
 
 class GroqClient:
@@ -84,28 +91,50 @@ class GroqClient:
                 logger.debug(f"Cache hit for prompt (model: {model})")
                 return _groq_response_cache[cache_key]
         
+        # Check circuit breaker before making request
+        circuit_breaker = get_groq_circuit_breaker()
+        if not circuit_breaker.can_proceed():
+            logger.warning("Circuit breaker OPEN: Groq API temporarily unavailable")
+            return None
+        
+        # Get Groq rate limiter and acquire permission before making request
+        rate_limiter = get_groq_rate_limiter()
+        estimated_tokens = rate_limiter.estimate_tokens(prompt, has_image=False)
+        
+        # Acquire rate limiter permission (waits if needed)
+        rate_limiter.acquire(wait=True, estimated_tokens=estimated_tokens)
+        
         for attempt in range(max_retries):
+            # CIRCUIT-AWARE RETRY: Check circuit breaker before each retry attempt
+            if attempt > 0 and not circuit_breaker.can_proceed():
+                logger.warning(f"Circuit breaker OPEN during Groq retry - aborting")
+                return None
+            
             try:
-                completion = self.client.chat.completions.create(
-                    model=model,
-                    messages=[
-                        {
-                            "role": "user",
-                            "content": prompt
-                        }
-                    ],
-                    temperature=1,
-                    max_completion_tokens=1024,
-                    top_p=1,
-                    stream=False,  # Non-streaming for easier response handling
-                    stop=None
-                )
+                # CRITICAL: Use concurrency guard to limit parallel Groq calls
+                with groq_concurrency_guard():
+                    completion = self.client.chat.completions.create(
+                        model=model,
+                        messages=[
+                            {
+                                "role": "user",
+                                "content": prompt
+                            }
+                        ],
+                        temperature=1,
+                        max_completion_tokens=1024,
+                        top_p=1,
+                        stream=False,  # Non-streaming for easier response handling
+                        stop=None
+                    )
                 
-                # Extract text from response
+                # Extract text from response (outside guard)
                 if completion.choices and len(completion.choices) > 0:
                     message = completion.choices[0].message
                     if hasattr(message, 'content') and message.content:
                         response_text = message.content.strip()
+                        # Record success in circuit breaker
+                        circuit_breaker.record_success()
                         # Cache response
                         if use_cache:
                             cache_key = self._get_cache_key(prompt, model)
@@ -113,6 +142,8 @@ class GroqClient:
                         return response_text
                     elif hasattr(message, 'text'):
                         response_text = message.text.strip()
+                        # Record success in circuit breaker
+                        circuit_breaker.record_success()
                         # Cache response
                         if use_cache:
                             cache_key = self._get_cache_key(prompt, model)
@@ -120,7 +151,7 @@ class GroqClient:
                         return response_text
                 
                 return None
-                
+            
             except Exception as e:
                 error_str = str(e)
                 
@@ -129,30 +160,45 @@ class GroqClient:
                     '429' in error_str or 
                     'quota' in error_str.lower() or 
                     'rate limit' in error_str.lower() or
+                    'rate_limit_exceeded' in error_str.lower() or
                     'retry' in error_str.lower()
                 )
                 
                 if is_rate_limit:
+                    # Record error in circuit breaker
+                    circuit_breaker.record_error(is_rate_limit=True)
+                    
+                    # CIRCUIT-AWARE: If circuit just opened, don't retry
+                    if not circuit_breaker.can_proceed():
+                        logger.warning("Circuit breaker OPEN after Groq 429 - skipping retries")
+                        return None
+                    
                     # Extract retry delay from error message if available
                     retry_delay = self._extract_retry_delay(error_str)
                     if retry_delay:
                         logger.warning(
-                            f"Rate limit hit. Waiting {retry_delay}s before retry "
+                            f"Groq rate limit hit (429). Waiting {retry_delay}s before retry "
                             f"(attempt {attempt + 1}/{max_retries})"
                         )
                         time.sleep(retry_delay)
+                        # Re-acquire rate limiter after waiting
+                        rate_limiter.acquire(wait=True, estimated_tokens=estimated_tokens)
                     else:
-                        # Default delay: exponential backoff with minimum 1 second
-                        delay = min(1 * (2 ** attempt), 60)  # Max 60 seconds
+                        # Default delay: exponential backoff with minimum 2 seconds (Groq often says "try again in 2s")
+                        delay = min(2 * (2 ** attempt), 60)  # Start at 2s, max 60 seconds
                         logger.warning(
-                            f"Rate limit hit. Waiting {delay}s before retry "
+                            f"Groq rate limit hit (429). Waiting {delay}s before retry "
                             f"(attempt {attempt + 1}/{max_retries})"
                         )
                         time.sleep(delay)
+                            # Re-acquire rate limiter after waiting
+                        rate_limiter.acquire(wait=True, estimated_tokens=estimated_tokens)
                 else:
                     logger.warning(f"Groq API call failed (attempt {attempt + 1}/{max_retries}): {e}")
                 
                 if attempt == max_retries - 1:
+                    # Record final failure in circuit breaker
+                    circuit_breaker.record_error(is_rate_limit=is_rate_limit)
                     logger.error("All Groq API retry attempts failed")
                     return None
                 
@@ -164,18 +210,22 @@ class GroqClient:
     
     def _extract_retry_delay(self, error_str: str) -> Optional[float]:
         """Extract retry delay from error message."""
-        # Look for patterns like "retry in 49.42s" or "wait 30 seconds"
+        # Look for patterns like "retry in 49.42s", "wait 30 seconds", "try again in 2s"
         patterns = [
+            r'try again in (\d+\.?\d*)\s*s',  # Groq format: "try again in 2s"
             r'retry in (\d+\.?\d*)\s*s',
             r'wait (\d+\.?\d*)\s*seconds?',
             r'retry after (\d+\.?\d*)\s*s',
+            r'(\d+\.?\d*)\s*seconds?',  # Generic number followed by "seconds"
         ]
         
         for pattern in patterns:
             match = re.search(pattern, error_str, re.IGNORECASE)
             if match:
                 try:
-                    return float(match.group(1))
+                    delay = float(match.group(1))
+                    # Add small buffer (0.5s) to be safe
+                    return delay + 0.5
                 except (ValueError, IndexError):
                     continue
         
