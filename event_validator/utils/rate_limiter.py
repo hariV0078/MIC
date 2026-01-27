@@ -185,8 +185,8 @@ def get_rate_limiter() -> TokenBucketRateLimiter:
             # Default to 145 RPM (97% of Gemini's 150 RPM limit)
             # Gemini-2.5-pro limits: 150 RPM, 2M TPM, 10K RPD
             # Using 145 RPM for maximum throughput while staying safe
-            requests_per_minute = int(os.getenv('GEMINI_RPM_LIMIT', '145'))
-            safety_factor = float(os.getenv('RATE_LIMIT_SAFETY_FACTOR', '0.9'))
+            requests_per_minute = int(os.getenv('GEMINI_RPM_LIMIT', '148'))
+            safety_factor = float(os.getenv('RATE_LIMIT_SAFETY_FACTOR', '0.98'))
             jitter_enabled = os.getenv('GEMINI_JITTER_ENABLED', 'true').lower() == 'true'
             jitter_min = float(os.getenv('GEMINI_JITTER_MIN', '0.9'))
             jitter_max = float(os.getenv('GEMINI_JITTER_MAX', '1.6'))

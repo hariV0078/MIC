@@ -527,9 +527,9 @@ def process_csv(
     reset_batch_hash_tracker()
     
     # Process rows in parallel for better performance
-    # Optimized for 8-minute target: 8 workers × 4 concurrent Gemini calls = 32 concurrent API calls
-    # With 145 RPM (138 effective after 95% safety), this provides maximum throughput
-    max_workers = min(int(os.getenv('DEFAULT_MAX_WORKERS', '8')), len(rows))
+    # Optimized for 8-minute target: 12 workers × 6 concurrent Gemini calls = 72 concurrent API calls
+    # With 148 RPM (145 effective after 98% safety), this provides maximum safe throughput
+    max_workers = min(int(os.getenv('DEFAULT_MAX_WORKERS', '12')), len(rows))
     from event_validator.utils.concurrency import GEMINI_MAX_CONCURRENT
     logger.info(f"Processing {len(rows)} submissions with {max_workers} parallel workers (Gemini concurrency: {GEMINI_MAX_CONCURRENT})")
     

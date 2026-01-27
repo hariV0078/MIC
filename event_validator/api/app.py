@@ -63,22 +63,22 @@ from event_validator.utils.rate_limiter import get_rate_limiter
 
 # Calculate optimal concurrency based on rate limits
 # Gemini-2.5-pro limits: 150 RPM, 2M TPM, 10K RPD
-# Using 145 RPM (97% of limit) for maximum throughput
-GEMINI_RPM = int(os.getenv('GEMINI_RPM_LIMIT', '145'))
+# Using 148 RPM (98.7% of limit) for maximum safe throughput
+GEMINI_RPM = int(os.getenv('GEMINI_RPM_LIMIT', '148'))
 
 # REDUCED: Workers limited to 4 to prevent burst 429s
 # With GEMINI_MAX_CONCURRENT=2 semaphore, this means:
 # - Max 4 submissions processing in parallel
 # - Max 2 Gemini API calls in flight at once (across all workers)
 # This is much more stable than 6 workers with burst
-OPTIMAL_CONCURRENCY = min(4, int(os.getenv('DEFAULT_MAX_WORKERS', '4')))  # Default 4, max 4
+OPTIMAL_CONCURRENCY = min(12, int(os.getenv('DEFAULT_MAX_WORKERS', '12')))  # Default 12, max 12
 
 # Request-level semaphore (legacy, actual concurrency controlled by utils/concurrency.py)
 MAX_CONCURRENT_API_CALLS = OPTIMAL_CONCURRENCY * 2
 _api_semaphore = threading.Semaphore(MAX_CONCURRENT_API_CALLS)
 
-# Default max workers for parallel processing (reduced from 6 to 4)
-DEFAULT_MAX_WORKERS = int(os.getenv('DEFAULT_MAX_WORKERS', '4'))  # Reduced from 6 to 4
+# Default max workers for parallel processing (optimized for 8-minute target)
+DEFAULT_MAX_WORKERS = int(os.getenv('DEFAULT_MAX_WORKERS', '12'))  # Increased from 8 to 12
 
 # Rate limit detection: Track if we're in rate limit mode (sequential processing)
 _rate_limit_detected = threading.Event()

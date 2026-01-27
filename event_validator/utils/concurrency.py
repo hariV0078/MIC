@@ -16,8 +16,8 @@ logger = logging.getLogger(__name__)
 
 # Provider-specific concurrency limits
 # Gemini-2.5-pro supports up to 10 concurrent calls (AFC max remote calls: 10)
-# Using 4 concurrent calls for high throughput while staying safe
-GEMINI_MAX_CONCURRENT = int(os.getenv('GEMINI_MAX_CONCURRENT', '4'))  # Increased from 1 to 4
+# Using 6 concurrent calls for maximum throughput while staying safe
+GEMINI_MAX_CONCURRENT = int(os.getenv('GEMINI_MAX_CONCURRENT', '6'))  # Increased from 4 to 6
 GROQ_MAX_CONCURRENT = int(os.getenv('GROQ_MAX_CONCURRENT', '1'))
 
 # Global semaphores (thread-safe)
