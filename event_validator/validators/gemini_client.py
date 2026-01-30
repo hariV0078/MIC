@@ -498,7 +498,7 @@ Task: Check if:
 1. PDF title matches expected title (fuzzy match acceptable)
 2. PDF objectives match expected objectives
 3. PDF learning outcomes match expected learning outcomes
-4. PDF contains participant information indicating 20+ participants
+4. PDF contains participant information indicating 15+ participants
 
 Respond in this exact format (one line per check):
 TITLE_MATCH: YES or NO
@@ -584,14 +584,14 @@ Expected Metadata:
 - Title: {expected_title or 'Not specified'}
 - Objectives: {expected_objectives or 'Not specified'}
 - Learning Outcomes: {expected_learning_outcomes or 'Not specified'}
-- Expected Participants: {expected_participants or 'Not specified (needs 20+)'}
+- Expected Participants: {expected_participants or 'Not specified (needs 15+)'}
 
 Task: Validate ALL of the following in ONE analysis:
 1. Does the PDF title match the expected title? (fuzzy/semantic match acceptable)
 2. Are expert details present? (Look for: expert name, designation, affiliation, speaker, facilitator, resource person, keynote speaker, presenter)
 3. Do the learning outcomes in the PDF align with the expected learning outcomes? (semantic alignment)
 4. Do the objectives in the PDF match the expected objectives? (semantic alignment)
-5. Does the PDF contain participant information indicating 20+ participants? (Look for participant count, attendance, number of attendees)
+5. Does the PDF contain participant information indicating 15+ participants? (Look for participant count, attendance, number of attendees)
 
 Respond in this EXACT format (one line per check):
 TITLE_MATCH: YES or NO
@@ -660,14 +660,14 @@ REASONING: <brief explanation of your findings>"""
             event_theme: Event theme for context
         
         Returns:
-            Dict with keys: has_banner, is_real_event, mode_matches, has_20_plus_participants,
+            Dict with keys: has_banner, is_real_event, mode_matches, has_15_plus_participants,
             banner_text_matches, participant_count_estimate, detailed_reasoning
         """
         results = {
             "has_banner": False,
             "is_real_event": False,
             "mode_matches": False,
-            "has_20_plus_participants": False,
+            "has_15_plus_participants": False,
             "banner_text_matches": False,
             "participant_count_estimate": 0,
             "detailed_reasoning": ""
@@ -719,7 +719,7 @@ BANNER_TEXT_MATCHES: YES or NO
 IS_REAL_EVENT: YES or NO
 MODE_MATCHES: YES or NO
 PARTICIPANT_COUNT: <number>
-HAS_20_PLUS_PARTICIPANTS: YES or NO
+HAS_15_PLUS_PARTICIPANTS: YES or NO
 REASONING: <brief explanation>"""
         
         response = self._call_gemini(prompt, image_path=image_path, use_cache=False)
@@ -754,8 +754,8 @@ REASONING: <brief explanation>"""
                     results["participant_count_estimate"] = int(count_str)
                 except (ValueError, IndexError):
                     pass
-            elif 'HAS_20_PLUS_PARTICIPANTS:' in line:
-                results["has_20_plus_participants"] = "YES" in line.upper()
+            elif 'HAS_15_PLUS_PARTICIPANTS:' in line:
+                results["has_15_plus_participants"] = "YES" in line.upper()
             elif 'REASONING:' in line:
                 results["detailed_reasoning"] = line.split(':', 1)[1].strip() if ':' in line else ""
         
@@ -808,7 +808,7 @@ Task: Validate the PDF content and determine:
 2. Do the PDF objectives align with expected objectives?
 3. Do the PDF learning outcomes align with expected learning outcomes?
 4. Are expert details present (name, designation, affiliation)?
-5. Does the PDF contain participant information indicating 20+ participants?
+5. Does the PDF contain participant information indicating 15+ participants?
 6. Does the overall content align with the declared theme?
 
 Respond in this exact format:

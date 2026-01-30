@@ -176,8 +176,9 @@ def determine_level(event_type: str, duration_hours: Optional[float]) -> Optiona
     Determine level based on event type and duration.
     
     Returns level (1-4) or None if cannot be determined.
+    If event_type is empty, determines level by duration only.
     """
-    if not event_type or duration_hours is None:
+    if duration_hours is None:
         return None
     
     # Ensure duration_hours is a numeric type
@@ -186,23 +187,24 @@ def determine_level(event_type: str, duration_hours: Optional[float]) -> Optiona
     except (ValueError, TypeError):
         return None
     
-    event_type = event_type.strip()
+    # If event_type is provided, try to match by event type first
+    if event_type:
+        event_type = event_type.strip()
+        # Try to determine level from event type first
+        for level, definition in LEVEL_DEFINITIONS.items():
+            if event_type in definition["event_types"]:
+                min_hours, max_hours = definition["duration_range"]
+                if min_hours <= duration_hours <= max_hours:
+                    return level
     
-    # Try to determine level from event type first
-    for level, definition in LEVEL_DEFINITIONS.items():
-        if event_type in definition["event_types"]:
-            min_hours, max_hours = definition["duration_range"]
-            if min_hours <= duration_hours <= max_hours:
-                return level
-    
-    # If event type doesn't match, determine by duration only
+    # If event type doesn't match or is empty, determine by duration only
     if 2 <= duration_hours <= 4:
         return 1
     elif 5 <= duration_hours <= 8:
         return 2
     elif 9 <= duration_hours <= 18:
         return 3
-    elif duration_hours > 18:
+    elif duration_hours >= 19:
         return 4
     
     return None

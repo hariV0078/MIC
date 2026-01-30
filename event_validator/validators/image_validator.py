@@ -170,11 +170,11 @@ def validate_event_mode_matches(
         )
 
 
-def validate_20_plus_participants_visible(
+def validate_15_plus_participants_visible(
     submission: EventSubmission,
     analysis: Optional[dict] = None
 ) -> ValidationResult:
-    """Check if 20+ participants are visible in images."""
+    """Check if 15+ participants are visible in images."""
     rule_name, points = IMAGE_RULES[4]
     
     if not submission.images:
@@ -193,7 +193,7 @@ def validate_20_plus_participants_visible(
             message="Image analysis not provided"
         )
     
-    if analysis.get("has_20_plus_participants", False):
+    if analysis.get("has_15_plus_participants", False):
         return ValidationResult(
             criterion=rule_name,
             passed=True,
@@ -205,7 +205,7 @@ def validate_20_plus_participants_visible(
             criterion=rule_name,
             passed=False,
             points_awarded=0,
-            message="20+ participants not visible in images"
+            message="15+ participants not visible in images"
         )
 
 
@@ -221,7 +221,7 @@ def validate_images(submission: EventSubmission, gemini_client: GeminiClient) ->
         results.append(validate_banner_poster_visible(submission, None))
         results.append(validate_real_activity_scene(submission, None))
         results.append(validate_event_mode_matches(submission, None))
-        results.append(validate_20_plus_participants_visible(submission, None))
+        results.append(validate_15_plus_participants_visible(submission, None))
         return results
     
     # OPTIMIZATION: Call analyze_image() ONCE and reuse results for all validations
@@ -248,7 +248,7 @@ def validate_images(submission: EventSubmission, gemini_client: GeminiClient) ->
     results.append(validate_banner_poster_visible(submission, analysis))
     results.append(validate_real_activity_scene(submission, analysis))
     results.append(validate_event_mode_matches(submission, analysis))
-    results.append(validate_20_plus_participants_visible(submission, analysis))
+    results.append(validate_15_plus_participants_visible(submission, analysis))
     
     return results
 

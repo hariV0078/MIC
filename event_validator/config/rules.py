@@ -6,7 +6,7 @@ from typing import Dict, List, Tuple
 THEME_RULES: List[Tuple[str, int]] = [
     ("Title/Objectives/Learning align to theme", 10),
     ("Level matches duration", 11),
-    ("Participants reported > 20", 12),
+    ("Participants reported > 15", 12),
     ("Year alignment (financial vs academic)", 7),
 ]
 
@@ -25,7 +25,7 @@ IMAGE_RULES: List[Tuple[str, int]] = [
     ("Banner/Poster visible", 2),
     ("Event scene is real activity", 3),
     ("Event mode matches (online/offline)", 5),
-    ("20+ participants visible", 4),
+    ("15+ participants visible", 4),
 ]
 
 # Similarity Test - 15 points total

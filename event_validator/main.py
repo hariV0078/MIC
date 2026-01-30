@@ -86,17 +86,17 @@ def print_header(text: str, char: str = "=", color: str = Colors.CYAN):
 
 def print_success(text: str):
     """Print success message."""
-    print(Colors.GREEN + Colors.BOLD + "✓ " + Colors.RESET + Colors.GREEN + text + Colors.RESET)
+    print(Colors.GREEN + Colors.BOLD + "[OK] " + Colors.RESET + Colors.GREEN + text + Colors.RESET)
 
 
 def print_error(text: str):
     """Print error message."""
-    print(Colors.RED + Colors.BOLD + "✗ " + Colors.RESET + Colors.RED + text + Colors.RESET)
+    print(Colors.RED + Colors.BOLD + "[X] " + Colors.RESET + Colors.RED + text + Colors.RESET)
 
 
 def print_warning(text: str):
     """Print warning message."""
-    print(Colors.YELLOW + Colors.BOLD + "⚠ " + Colors.RESET + Colors.YELLOW + text + Colors.RESET)
+    print(Colors.YELLOW + Colors.BOLD + "[!] " + Colors.RESET + Colors.YELLOW + text + Colors.RESET)
 
 
 def print_info(text: str):
@@ -107,20 +107,20 @@ def print_info(text: str):
 def print_section(text: str):
     """Print section header."""
     print()
-    print(Colors.BRIGHT_BLUE + Colors.BOLD + "▶ " + text + Colors.RESET)
-    print(Colors.DIM + "─" * 70 + Colors.RESET)
+    print(Colors.BRIGHT_BLUE + Colors.BOLD + ">> " + text + Colors.RESET)
+    print(Colors.DIM + "-" * 70 + Colors.RESET)
 
 
 def print_banner():
     """Print application banner."""
     banner = """
-    ╔═══════════════════════════════════════════════════════════════╗
-    ║                                                               ║
-    ║          Event Validation System - AI Powered                ║
-    ║                                                               ║
-    ║          Powered by Google Gemini & Groq                     ║
-    ║                                                               ║
-    ╚═══════════════════════════════════════════════════════════════╝
+    +---------------------------------------------------------------+
+    |                                                               |
+    |          Event Validation System - AI Powered                 |
+    |                                                               |
+    |          Powered by Google Gemini & Groq                      |
+    |                                                               |
+    +---------------------------------------------------------------+
     """
     print(Colors.CYAN + Colors.BOLD + banner + Colors.RESET)
 
@@ -278,13 +278,13 @@ Examples:
         print(Colors.BRIGHT_WHITE + "  Output File: " + Colors.RESET + str(output_csv))
         print(Colors.BRIGHT_WHITE + "  Threshold:   " + Colors.RESET + f"{acceptance_threshold} points")
         if gemini_api_key:
-            print(Colors.BRIGHT_WHITE + "  API Status:  " + Colors.RESET + Colors.GREEN + "✓ Gemini API configured" + Colors.RESET)
+            print(Colors.BRIGHT_WHITE + "  API Status:  " + Colors.RESET + Colors.GREEN + "[OK] Gemini API configured" + Colors.RESET)
         else:
-            print(Colors.BRIGHT_WHITE + "  API Status:  " + Colors.RESET + Colors.RED + "✗ No API key found" + Colors.RESET)
+            print(Colors.BRIGHT_WHITE + "  API Status:  " + Colors.RESET + Colors.RED + "[X] No API key found" + Colors.RESET)
         
         print()
         print(Colors.BRIGHT_YELLOW + Colors.BOLD + "Starting validation process..." + Colors.RESET)
-        print(Colors.DIM + "─" * 70 + Colors.RESET)
+        print(Colors.DIM + "-" * 70 + Colors.RESET)
         print()
     
     else:
@@ -382,19 +382,19 @@ Examples:
                         print()
                         print_section("Summary Statistics")
                         print(Colors.BRIGHT_WHITE + f"  Total Submissions:  " + Colors.RESET + Colors.BOLD + str(total) + Colors.RESET)
-                        print(Colors.GREEN + f"  ✓ Accepted:        " + Colors.RESET + Colors.BRIGHT_GREEN + str(accepted) + Colors.RESET)
-                        print(Colors.RED + f"  ✗ Rejected:        " + Colors.RESET + Colors.BRIGHT_RED + str(rejected) + Colors.RESET)
-                        print(Colors.YELLOW + f"  ⚠ Reopen:          " + Colors.RESET + Colors.BRIGHT_YELLOW + str(reopen) + Colors.RESET)
+                        print(Colors.GREEN + f"  [OK] Accepted:     " + Colors.RESET + Colors.BRIGHT_GREEN + str(accepted) + Colors.RESET)
+                        print(Colors.RED + f"  [X] Rejected:      " + Colors.RESET + Colors.BRIGHT_RED + str(rejected) + Colors.RESET)
+                        print(Colors.YELLOW + f"  [!] Reopen:        " + Colors.RESET + Colors.BRIGHT_YELLOW + str(reopen) + Colors.RESET)
                         if error > 0:
-                            print(Colors.RED + f"  ✗ Errors:          " + Colors.RESET + Colors.BRIGHT_RED + str(error) + Colors.RESET)
+                            print(Colors.RED + f"  [X] Errors:        " + Colors.RESET + Colors.BRIGHT_RED + str(error) + Colors.RESET)
                         if scores:
-                            print(Colors.CYAN + f"  📊 Avg Score:      " + Colors.RESET + Colors.BRIGHT_CYAN + f"{avg_score:.1f}/100" + Colors.RESET)
+                            print(Colors.CYAN + f"  Avg Score:         " + Colors.RESET + Colors.BRIGHT_CYAN + f"{avg_score:.1f}/100" + Colors.RESET)
                         print()
                         print_section("Output File")
                         print(Colors.BRIGHT_WHITE + "  File:     " + Colors.RESET + Colors.BRIGHT_CYAN + str(output_csv.name) + Colors.RESET)
                         print(Colors.BRIGHT_WHITE + "  Location: " + Colors.RESET + Colors.DIM + str(output_csv.absolute()) + Colors.RESET)
                         print()
-                        print(Colors.GREEN + Colors.BOLD + "✓ Validation complete! Check the output file for detailed results." + Colors.RESET)
+                        print(Colors.GREEN + Colors.BOLD + "[OK] Validation complete! Check the output file for detailed results." + Colors.RESET)
                         print()
             except Exception as e:
                 # If we can't read the file, just show basic success message
@@ -406,7 +406,7 @@ Examples:
                 print(Colors.BRIGHT_WHITE + "  Output File: " + Colors.RESET + Colors.BRIGHT_CYAN + str(output_csv) + Colors.RESET)
                 print(Colors.BRIGHT_WHITE + "  Location:    " + Colors.RESET + Colors.DIM + str(output_csv.absolute()) + Colors.RESET)
                 print()
-                print(Colors.GREEN + Colors.BOLD + "✓ Validation complete! Check the output file for detailed results." + Colors.RESET)
+                print(Colors.GREEN + Colors.BOLD + "[OK] Validation complete! Check the output file for detailed results." + Colors.RESET)
                 print()
         
         return 0

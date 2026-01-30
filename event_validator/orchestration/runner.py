@@ -56,8 +56,8 @@ def _calculate_heuristic_score(submission: EventSubmission) -> int:
     try:
         participants_str = str(row_data.get('Participants', '0')).strip()
         participants = int(float(participants_str))
-        if participants > 20:
-            score += 12  # Participants > 20
+        if participants > 15:
+            score += 12  # Participants > 15
     except (ValueError, TypeError):
         pass
     

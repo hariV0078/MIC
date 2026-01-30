@@ -6,7 +6,7 @@ from datetime import datetime
 from event_validator.types import ValidationResult, EventSubmission
 from event_validator.config.rules import THEME_RULES
 from event_validator.validators.gemini_client import GeminiClient
-from event_validator.utils.column_mapper import validate_level_duration_match, LEVEL_DEFINITIONS
+from event_validator.utils.column_mapper import validate_level_duration_match, LEVEL_DEFINITIONS, determine_level
 from event_validator.utils.title_generator import (
     get_expected_title,
     format_title_validation_message,
@@ -77,15 +77,15 @@ def validate_theme_alignment(
     # activity_name is the primary field containing the event title
     event_title_for_check = activity_name or user_title or expected_title
     
-    # Use Gemini/Groq for semantic alignment check (adaptive routing: prefers Groq for text tasks)
-    logger.debug("  Calling API for theme alignment check (adaptive routing: prefers Groq for text)...")
+    # Use Gemini for semantic alignment check (optimized: Gemini has higher capacity than Groq)
+    logger.debug("  Calling API for theme alignment check (using Gemini for better throughput)...")
     logger.debug(f"  Using event title for theme check: {event_title_for_check[:100] if event_title_for_check else 'N/A'}")
     aligned = gemini_client.check_theme_alignment(
         title=event_title_for_check,
         objectives=objectives,
         learning_outcomes=learning_outcomes,
         theme=theme,
-        prefer_groq=True  # Prefer Groq for text tasks to preserve Gemini quota for vision
+        prefer_groq=False  # Use Gemini (150 RPM) instead of Groq (25 RPM) for better throughput
     )
     
     if aligned:
@@ -136,14 +136,42 @@ def validate_level_duration(
     # Parse duration (e.g., "3h", "2 hours", "180 minutes")
     duration_hours = _parse_duration(duration)
     
-    if not level or not duration_hours:
-        logger.warning(f"  FAIL: Level or Duration missing/invalid | Points: 0")
+    if not duration_hours:
+        logger.warning(f"  FAIL: Duration missing/invalid | Points: 0")
         return ValidationResult(
             criterion=rule_name,
             passed=False,
             points_awarded=0,
-            message=f"Level or Duration missing/invalid. Level: {level}, Duration: {duration}"
+            message=f"Duration missing/invalid. Duration: {duration}"
         )
+    
+    # If level is empty, try to auto-determine it from duration
+    if not level:
+        event_type = row_data.get('Event Type', '').strip()
+        auto_determined_level = determine_level(event_type, duration_hours)
+        
+        if auto_determined_level:
+            # Update the level in submission data
+            submission.row_data['Level'] = str(auto_determined_level)
+            # Also update in original data if it exists
+            if hasattr(submission, '_original_row_data'):
+                submission._original_row_data['Level'] = str(auto_determined_level)
+            
+            logger.info(f"  AUTO-DETERMINED: Level set to {auto_determined_level} based on duration {duration_hours}h | Points: {points}")
+            return ValidationResult(
+                criterion=rule_name,
+                passed=True,
+                points_awarded=points,
+                message=f"Level auto-determined as {auto_determined_level} based on duration {duration_hours}h"
+            )
+        else:
+            logger.warning(f"  FAIL: Level missing and cannot be determined from duration {duration_hours}h | Points: 0")
+            return ValidationResult(
+                criterion=rule_name,
+                passed=False,
+                points_awarded=0,
+                message=f"Level missing and cannot be determined from duration {duration_hours}h"
+            )
     
     try:
         level_int = int(level)
@@ -176,27 +204,47 @@ def validate_level_duration(
             message=""
         )
     else:
-        definition = LEVEL_DEFINITIONS[level_int]
-        min_hours, max_hours = definition["duration_range"]
-        if max_hours == float('inf'):
-            expected_range = f"{min_hours}+ hours"
-        else:
-            expected_range = f"{min_hours}-{max_hours} hours"
+        # Level doesn't match duration - try to auto-correct
+        event_type = row_data.get('Event Type', '').strip()
+        corrected_level = determine_level(event_type, duration_hours)
         
-        logger.warning(f"  FAIL: Duration {duration_hours}h does not match Level {level} requirements ({expected_range}) | Points: 0")
-        return ValidationResult(
-            criterion=rule_name,
-            passed=False,
-            points_awarded=0,
-            message=f"Duration {duration_hours}h does not match Level {level} requirements ({expected_range})"
-        )
+        if corrected_level and corrected_level != level_int:
+            # Update the level in submission data
+            submission.row_data['Level'] = str(corrected_level)
+            # Also update in original data if it exists
+            if hasattr(submission, '_original_row_data'):
+                submission._original_row_data['Level'] = str(corrected_level)
+            
+            logger.info(f"  CORRECTED: Level changed from {level} to {corrected_level} based on duration {duration_hours}h | Points: {points}")
+            return ValidationResult(
+                criterion=rule_name,
+                passed=True,
+                points_awarded=points,
+                message=f"Level auto-corrected from {level} to {corrected_level} based on duration {duration_hours}h"
+            )
+        else:
+            # Cannot determine correct level or level is already correct but validation failed
+            definition = LEVEL_DEFINITIONS[level_int]
+            min_hours, max_hours = definition["duration_range"]
+            if max_hours == float('inf'):
+                expected_range = f"{min_hours}+ hours"
+            else:
+                expected_range = f"{min_hours}-{max_hours} hours"
+            
+            logger.warning(f"  FAIL: Duration {duration_hours}h does not match Level {level} requirements ({expected_range}) | Points: 0")
+            return ValidationResult(
+                criterion=rule_name,
+                passed=False,
+                points_awarded=0,
+                message=f"Duration {duration_hours}h does not match Level {level} requirements ({expected_range})"
+            )
 
 
 def validate_participants_reported(
     submission: EventSubmission,
     gemini_client: Optional[GeminiClient] = None
 ) -> ValidationResult:
-    """Check if participants reported > 20."""
+    """Check if participants reported > 15."""
     rule_name, points = THEME_RULES[2]
     
     row_data = submission.row_data
@@ -211,8 +259,8 @@ def validate_participants_reported(
     
     logger.debug(f"  Participants: {participants}")
     
-    if participants > 20:
-        logger.info(f"  PASS: {participants} participants reported (> 20) | Points: {points}")
+    if participants > 15:
+        logger.info(f"  PASS: {participants} participants reported (> 15) | Points: {points}")
         return ValidationResult(
             criterion=rule_name,
             passed=True,
@@ -220,12 +268,12 @@ def validate_participants_reported(
             message=""
         )
     else:
-        logger.warning(f"  FAIL: {participants} participants reported (needs > 20) | Points: 0")
+        logger.warning(f"  FAIL: {participants} participants reported (needs > 15) | Points: 0")
         return ValidationResult(
             criterion=rule_name,
             passed=False,
             points_awarded=0,
-            message=f"Participants reported: {participants} (needs > 20)"
+            message=f"Participants reported: {participants} (needs > 15)"
         )
 
 

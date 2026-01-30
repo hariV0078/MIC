@@ -236,7 +236,7 @@ def validate_participant_info_match(
             criterion=rule_name,
             passed=False,
             points_awarded=0,
-            message=f"PDF participant information does not match expected (needs 20+ participants)"
+            message=f"PDF participant information does not match expected (needs 15+ participants)"
         )
 
 
@@ -339,7 +339,7 @@ def validate_pdf(submission: EventSubmission, gemini_client: GeminiClient) -> Li
         criterion=rule_name,
         passed=validation_results.get("participants_valid", False),
         points_awarded=points if validation_results.get("participants_valid", False) else 0,
-        message="" if validation_results.get("participants_valid", False) else f"PDF participant information does not match expected (needs 20+ participants)"
+        message="" if validation_results.get("participants_valid", False) else f"PDF participant information does not match expected (needs 15+ participants)"
     ))
     
     logger.debug(f"PDF validation complete. Reasoning: {validation_results.get('reasoning', 'N/A')}")
