@@ -240,12 +240,49 @@ def validate_participant_info_match(
         )
 
 
+def _is_mic_event(submission: EventSubmission) -> bool:
+    """Check if this is a MIC event - automatically accept PDF validation."""
+    row_data = submission.row_data
+    original_data = getattr(submission, '_original_row_data', row_data)
+    
+    # Check multiple possible identifiers for MIC events
+    event_type = str(row_data.get('Event Type', '')).strip().upper()
+    theme = str(row_data.get('Theme', '')).strip().upper()
+    title = str(row_data.get('Title', '')).strip().upper()
+    activity_name = str(original_data.get('activity_name', '')).strip().upper()
+    
+    # Check if any field contains "MIC" (case-insensitive)
+    mic_indicators = ['MIC', 'MIC-IIC', 'MIC IIC']
+    for indicator in mic_indicators:
+        if (indicator in event_type or 
+            indicator in theme or 
+            indicator in title or 
+            indicator in activity_name):
+            return True
+    
+    return False
+
+
 def validate_pdf(submission: EventSubmission, gemini_client: GeminiClient) -> List[ValidationResult]:
     """
     OPTIMIZED: Run all PDF validations using a single unified API call.
     This replaces 5 separate calls with 1 call, providing ~3-4x speedup.
+    
+    SPECIAL CASE: MIC events automatically pass all PDF validations.
     """
     results = []
+    
+    # SPECIAL CASE: MIC events - automatically accept all PDF validations
+    if _is_mic_event(submission):
+        logger.info("MIC event detected - automatically accepting all PDF validations")
+        for rule_name, points in PDF_RULES:
+            results.append(ValidationResult(
+                criterion=rule_name,
+                passed=True,
+                points_awarded=points,
+                message="MIC event - PDF validation auto-accepted"
+            ))
+        return results
     
     # Pre-check: If PDF data is missing, return all failures immediately (pre-scoring gate)
     if not submission.pdf_data or not submission.pdf_data.text:

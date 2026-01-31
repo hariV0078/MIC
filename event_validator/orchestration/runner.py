@@ -27,6 +27,67 @@ from event_validator.utils.file_operations import read_csv_from_path
 logger = logging.getLogger(__name__)
 
 
+def _get_score_column_name(criterion: str) -> str:
+    """Map validation criterion to CSV column name for score breakdown."""
+    # Map rule names to column names (camelCase format)
+    column_mapping = {
+        # Theme rules
+        "Title/Objectives/Learning align to theme": "themeAlignmentScore",
+        "Level matches duration": "levelDurationScore",
+        "Participants reported > 15": "participantsReportedScore",
+        "Year alignment (financial vs academic)": "yearAlignmentScore",
+        # PDF rules
+        "PDF title matches metadata": "pdfTitleScore",
+        "Expert details present": "pdfExpertScore",
+        "Learning outcomes align": "pdfLearningScore",
+        "Objectives match": "pdfObjectivesScore",
+        "Participant info matches": "pdfParticipantScore",
+        # Image rules
+        "GeoTag present": "imgGeotagScore",
+        "Banner/Poster visible": "imgBannerScore",
+        "Event scene is real activity": "imgRealActivityScore",
+        "Event mode matches (online/offline)": "imgModeScore",
+        "15+ participants visible": "imgParticipantsScore",
+        # Similarity rules
+        "Duplicate photo detection (filesystem)": "duplicateScore",
+    }
+    return column_mapping.get(criterion, criterion.replace(" ", "").replace("/", "") + "Score")
+
+
+def _add_score_breakdown_to_row(enriched_row: dict, all_results: List[ValidationResult]) -> dict:
+    """Add individual score breakdown columns to enriched row."""
+    from event_validator.config.rules import get_rule_points, get_all_rules
+    
+    # Get all rules to know max points for each
+    all_rules_dict = {}
+    for category, rules in get_all_rules().items():
+        for rule_name, max_points in rules:
+            all_rules_dict[rule_name] = max_points
+    
+    # Initialize all score columns first (set to "0/0" if no result)
+    all_score_columns = [
+        'themeAlignmentScore', 'levelDurationScore', 'participantsReportedScore', 'yearAlignmentScore',
+        'pdfTitleScore', 'pdfExpertScore', 'pdfLearningScore', 'pdfObjectivesScore', 'pdfParticipantScore',
+        'imgGeotagScore', 'imgBannerScore', 'imgRealActivityScore', 'imgModeScore', 'imgParticipantsScore',
+        'duplicateScore'
+    ]
+    for col in all_score_columns:
+        if col not in enriched_row:
+            enriched_row[col] = "0/0"
+    
+    # Add score columns for each result
+    for result in all_results:
+        column_name = _get_score_column_name(result.criterion)
+        max_points = all_rules_dict.get(result.criterion, result.points_awarded)
+        # Format: "2.0/2" or "0/7" (no .0 for zero)
+        if result.points_awarded == 0:
+            enriched_row[column_name] = f"0/{max_points}"
+        else:
+            enriched_row[column_name] = f"{result.points_awarded}.0/{max_points}"
+    
+    return enriched_row
+
+
 def _calculate_heuristic_score(submission: EventSubmission) -> int:
     """
     Pre-scoring gate: Calculate a quick heuristic score without AI calls.
@@ -325,7 +386,7 @@ def process_submission(
     
     # Image validation
     logger.info("─" * 80)
-    logger.info("IMAGE VALIDATION (14 points total - Geotag validation disabled)")
+    logger.info("IMAGE VALIDATION (20 points total)")
     logger.info("─" * 80)
     if submission.images:
         # Check budget before image validation (1 API call per image, but we use first image)
@@ -351,7 +412,7 @@ def process_submission(
         image_points = sum(r.points_awarded for r in image_results)
         image_passed = sum(1 for r in image_results if r.passed)
         image_total = len(image_results)
-        logger.info(f"Image Validation Summary: {image_passed}/{image_total} passed | Points: {image_points}/14 (Geotag validation disabled)")
+        logger.info(f"Image Validation Summary: {image_passed}/{image_total} passed | Points: {image_points}/20")
         for result in image_results:
             status = "✓ PASS" if result.passed else "✗ FAIL"
             logger.info(f"  [{status}] {result.criterion}: {result.points_awarded} points | {result.message or 'OK'}")
@@ -405,10 +466,10 @@ def process_submission(
     logger.info(f"Score Breakdown:")
     logger.info(f"  Theme:    {theme_points}/33 (Year alignment disabled)")
     logger.info(f"  PDF:      {pdf_points}/25")
-    logger.info(f"  Image:    {image_points}/14 (Geotag validation disabled)")
+    logger.info(f"  Image:    {image_points}/20")
     logger.info(f"  Duplicate: {duplicate_points}/15")
     logger.info(f"  ─────────────────────")
-    logger.info(f"  TOTAL:    {total_points}/87 (max possible with disabled validations)")
+    logger.info(f"  TOTAL:    {total_points}/93 (max possible - Year alignment disabled)")
     
     # Determine status
     threshold = config.acceptance_threshold or ACCEPTANCE_THRESHOLD
@@ -429,11 +490,11 @@ def process_submission(
     logger.info(f"Acceptance Threshold: {threshold} points")
     logger.info(f"Final Status: {submission.status} ({'≥' if total_points >= threshold else '<'} {threshold} points)")
     
-    # Generate requirements not met message
+    # Generate requirements not met message (without rule name prefix)
     failed_results = [r for r in all_results if not r.passed]
     if failed_results:
         requirements_not_met = "; ".join([
-            f"{r.criterion}: {r.message}" if r.message else r.criterion
+            r.message if r.message else r.criterion
             for r in failed_results
         ])
         submission.requirements_not_met = requirements_not_met
@@ -546,6 +607,9 @@ def process_csv(
             enriched_row['Status'] = submission.status
             enriched_row['Requirements Not Met'] = submission.requirements_not_met
             
+            # Add individual score breakdown columns
+            enriched_row = _add_score_breakdown_to_row(enriched_row, submission.validation_results)
+            
             logger.info(
                 f"Submission {index + 1}/{len(rows)}: Score={submission.overall_score}, "
                 f"Status={submission.status}"
@@ -559,6 +623,15 @@ def process_csv(
             enriched_row['Overall Score'] = "0"
             enriched_row['Status'] = "Error"
             enriched_row['Requirements Not Met'] = f"Processing error: {str(e)}"
+            # Initialize empty score columns for error cases
+            score_columns = [
+                'themeAlignmentScore', 'levelDurationScore', 'participantsReportedScore', 'yearAlignmentScore',
+                'pdfTitleScore', 'pdfExpertScore', 'pdfLearningScore', 'pdfObjectivesScore', 'pdfParticipantScore',
+                'imgGeotagScore', 'imgBannerScore', 'imgRealActivityScore', 'imgModeScore', 'imgParticipantsScore',
+                'duplicateScore'
+            ]
+            for col in score_columns:
+                enriched_row[col] = "0/0"
             return (index, enriched_row)
     
     # Process in parallel
@@ -586,6 +659,15 @@ def process_csv(
                 error_row['Overall Score'] = "0"
                 error_row['Status'] = "Error"
                 error_row['Requirements Not Met'] = f"Unexpected error: {str(e)}"
+                # Initialize empty score columns for error cases
+                score_columns = [
+                    'themeAlignmentScore', 'levelDurationScore', 'participantsReportedScore', 'yearAlignmentScore',
+                    'pdfTitleScore', 'pdfExpertScore', 'pdfLearningScore', 'pdfObjectivesScore', 'pdfParticipantScore',
+                    'imgGeotagScore', 'imgBannerScore', 'imgRealActivityScore', 'imgModeScore', 'imgParticipantsScore',
+                    'duplicateScore'
+                ]
+                for col in score_columns:
+                    error_row[col] = "0/0"
                 enriched_rows[original_index] = error_row
     
     # Filter out any None values (shouldn't happen, but safety check)
@@ -593,7 +675,14 @@ def process_csv(
     
     # Write output CSV with proper field ordering
     # Ensure required fields are always present
-    output_fieldnames = list(fieldnames) + ['Overall Score', 'Status', 'Requirements Not Met']
+    # Add score breakdown columns
+    score_columns = [
+        'themeAlignmentScore', 'levelDurationScore', 'participantsReportedScore', 'yearAlignmentScore',
+        'pdfTitleScore', 'pdfExpertScore', 'pdfLearningScore', 'pdfObjectivesScore', 'pdfParticipantScore',
+        'imgGeotagScore', 'imgBannerScore', 'imgRealActivityScore', 'imgModeScore', 'imgParticipantsScore',
+        'duplicateScore'
+    ]
+    output_fieldnames = list(fieldnames) + ['Overall Score', 'Status', 'Requirements Not Met'] + score_columns
     
     # Remove duplicates while preserving order
     seen = set()

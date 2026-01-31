@@ -291,7 +291,7 @@ Expected Learning Outcomes: {expected_learning_outcomes or 'Not provided'}
 Expected Participants: {expected_participants or 'Not provided'}
 
 Task: Check if:
-1. PDF title matches expected title (fuzzy match acceptable)
+1. PDF title matches expected title (SIMILARITY IS ACCEPTABLE - exact match not required. Accept if titles are semantically similar, have similar meaning, or contain key words from expected title. Minor variations in wording, word order, or formatting are acceptable.)
 2. PDF objectives match expected objectives
 3. PDF learning outcomes match expected learning outcomes
 4. PDF contains participant information indicating 15+ participants
@@ -477,7 +477,7 @@ PDF Content (first 3000 characters):
 {pdf_text[:3000]}
 
 Task: Validate the PDF content and determine:
-1. Does the PDF title match the expected title (fuzzy match acceptable)?
+1. Does the PDF title match the expected title? (SIMILARITY IS ACCEPTABLE - exact match not required. Accept if titles are semantically similar, have similar meaning, or contain key words from expected title. Minor variations in wording, word order, or formatting are acceptable.)
 2. Do the PDF objectives align with expected objectives?
 3. Do the PDF learning outcomes align with expected learning outcomes?
 4. Are expert details present (name, designation, affiliation)?

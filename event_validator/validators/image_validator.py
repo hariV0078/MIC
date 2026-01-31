@@ -213,8 +213,8 @@ def validate_images(submission: EventSubmission, gemini_client: GeminiClient) ->
     """Run all image validations."""
     results = []
     
-    # Geotag validation is DISABLED per user request
-    # results.append(validate_geotag_present(submission))
+    # Geotag validation is ENABLED
+    results.append(validate_geotag_present(submission))
     
     if not submission.images:
         # Return failed results for all validations if no images

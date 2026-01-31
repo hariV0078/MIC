@@ -495,7 +495,7 @@ Expected Learning Outcomes: {expected_learning_outcomes or 'Not provided'}
 Expected Participants: {expected_participants or 'Not provided'}
 
 Task: Check if:
-1. PDF title matches expected title (fuzzy match acceptable)
+1. PDF title matches expected title (SIMILARITY IS ACCEPTABLE - exact match not required. Accept if titles are semantically similar, have similar meaning, or contain key words from expected title. Minor variations in wording, word order, or formatting are acceptable.)
 2. PDF objectives match expected objectives
 3. PDF learning outcomes match expected learning outcomes
 4. PDF contains participant information indicating 15+ participants
@@ -587,7 +587,7 @@ Expected Metadata:
 - Expected Participants: {expected_participants or 'Not specified (needs 15+)'}
 
 Task: Validate ALL of the following in ONE analysis:
-1. Does the PDF title match the expected title? (fuzzy/semantic match acceptable)
+1. Does the PDF title match the expected title? (SIMILARITY IS ACCEPTABLE - exact match not required. Accept if titles are semantically similar, have similar meaning, or contain key words from expected title. Minor variations in wording, word order, or formatting are acceptable.)
 2. Are expert details present? (Look for: expert name, designation, affiliation, speaker, facilitator, resource person, keynote speaker, presenter)
 3. Do the learning outcomes in the PDF align with the expected learning outcomes? (semantic alignment)
 4. Do the objectives in the PDF match the expected objectives? (semantic alignment)
