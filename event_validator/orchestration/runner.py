@@ -490,13 +490,122 @@ def process_submission(
     logger.info(f"Acceptance Threshold: {threshold} points")
     logger.info(f"Final Status: {submission.status} ({'≥' if total_points >= threshold else '<'} {threshold} points)")
     
-    # Generate requirements not met message (without rule name prefix)
+    # Generate requirements not met message in specified format:
+    # "Title: ...; Participants: ...; Theme: ...; PDF: ...; Image Analysis: ..."
     failed_results = [r for r in all_results if not r.passed]
     if failed_results:
-        requirements_not_met = "; ".join([
-            r.message if r.message else r.criterion
-            for r in failed_results
-        ])
+        # Map criteria to category names
+        def get_category_name(criterion: str) -> str:
+            """Map validation criterion to category name."""
+            criterion_lower = criterion.lower()
+            if "title" in criterion_lower or "objectives" in criterion_lower or "learning" in criterion_lower:
+                if "theme" in criterion_lower or "align" in criterion_lower:
+                    return "Theme"
+                elif "pdf" in criterion_lower:
+                    return "PDF"
+                else:
+                    return "Title"
+            elif "participant" in criterion_lower:
+                if "pdf" in criterion_lower or "visible" in criterion_lower:
+                    return "Image Analysis"
+                else:
+                    return "Participants"
+            elif "pdf" in criterion_lower or "expert" in criterion_lower:
+                return "PDF"
+            elif "geotag" in criterion_lower or "banner" in criterion_lower or "poster" in criterion_lower or "event scene" in criterion_lower or "event mode" in criterion_lower or "visible" in criterion_lower:
+                return "Image Analysis"
+            elif "duplicate" in criterion_lower:
+                return "Image Analysis"
+            elif "level" in criterion_lower or "duration" in criterion_lower:
+                return "Title"
+            else:
+                return "Other"
+        
+        # Format failure messages (remove rule name prefix, keep only the reason)
+        def format_failure_message(result: ValidationResult) -> str:
+            """Format failure message without rule name prefix."""
+            message = result.message.strip() if result.message else ""
+            criterion = result.criterion
+            
+            # Remove rule name prefix if present (e.g., "PDF title matches metadata: Title not found" -> "Title not found")
+            if message:
+                # Check if message starts with criterion name
+                if message.lower().startswith(criterion.lower()):
+                    # Remove the prefix
+                    remaining = message[len(criterion):].strip()
+                    if remaining.startswith(":"):
+                        remaining = remaining[1:].strip()
+                    if remaining:
+                        return remaining
+                return message
+            
+            # If no message, create a default one based on criterion
+            if "title" in criterion.lower():
+                if "pdf" in criterion.lower():
+                    return "Title not found in PDF"
+                else:
+                    return "Title validation failed"
+            elif "participant" in criterion.lower():
+                if "pdf" in criterion.lower():
+                    return "Participant information missing in PDF"
+                elif "visible" in criterion.lower():
+                    return "Insufficient participants visible in images"
+                else:
+                    return "Participant count validation failed"
+            elif "theme" in criterion.lower() or "align" in criterion.lower():
+                return "Theme validation failed"
+            elif "expert" in criterion.lower():
+                return "Expert details missing in PDF"
+            elif "learning" in criterion.lower():
+                return "Learning outcomes not specified in PDF"
+            elif "objectives" in criterion.lower():
+                return "Objectives not clearly stated in PDF"
+            elif "geotag" in criterion.lower():
+                return "No GPS location data in images"
+            elif "banner" in criterion.lower() or "poster" in criterion.lower():
+                return "Banner or poster not visible"
+            elif "real activity" in criterion.lower():
+                return "Event scene does not show real activity"
+            elif "mode" in criterion.lower():
+                return "Event mode mismatch in images"
+            elif "duplicate" in criterion.lower():
+                return "Duplicate images detected"
+            elif "level" in criterion.lower() or "duration" in criterion.lower():
+                return "Level or duration validation failed"
+            else:
+                return criterion
+        
+        # Group failures by category
+        category_failures = {}
+        for result in failed_results:
+            category = get_category_name(result.criterion)
+            failure_msg = format_failure_message(result)
+            
+            if category not in category_failures:
+                category_failures[category] = []
+            category_failures[category].append(failure_msg)
+        
+        # Format as "Category: failure1; failure2; ..."
+        category_strings = []
+        for category in ["Title", "Participants", "Theme", "PDF", "Image Analysis"]:
+            if category in category_failures:
+                failures = category_failures[category]
+                if len(failures) == 1:
+                    category_strings.append(f"{category}: {failures[0]}")
+                else:
+                    # Multiple failures in same category: "Category: failure1; failure2; failure3"
+                    category_strings.append(f"{category}: {'; '.join(failures)}")
+        
+        # Add any other categories not in the standard list
+        for category in category_failures:
+            if category not in ["Title", "Participants", "Theme", "PDF", "Image Analysis"]:
+                failures = category_failures[category]
+                if len(failures) == 1:
+                    category_strings.append(f"{category}: {failures[0]}")
+                else:
+                    category_strings.append(f"{category}: {'; '.join(failures)}")
+        
+        requirements_not_met = "; ".join(category_strings)
         submission.requirements_not_met = requirements_not_met
         
         logger.info("─" * 80)
