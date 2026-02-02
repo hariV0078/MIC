@@ -45,6 +45,22 @@ def extract_image_metadata(image_path: Path) -> ImageData:
                             gps_tag = GPSTAGS.get(gps_tag_id, gps_tag_id)
                             gps_info[gps_tag] = gps_value
                         exif_data['GPSDetails'] = gps_info
+                        logger.debug(f"Geotag found in {image_path.name}: GPSInfo present with {len(gps_info)} GPS tags")
+            else:
+                logger.debug(f"No EXIF data found in {image_path.name}")
+                
+            # Additional check: Try alternative methods to detect GPS data
+            try:
+                # Check if image has any GPS-related metadata in info dict
+                if hasattr(img, 'info'):
+                    info = img.info
+                    # Some formats store GPS in info dict
+                    if any('gps' in str(k).lower() or 'location' in str(k).lower() for k in info.keys()):
+                        has_geotag = True
+                        logger.debug(f"Geotag found in {image_path.name} via info dict")
+            except Exception as e:
+                logger.debug(f"Could not check info dict for GPS in {image_path.name}: {e}")
+                
         except Exception as e:
             logger.warning(f"Error extracting EXIF from {image_path}: {e}")
     

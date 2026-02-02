@@ -331,15 +331,61 @@ def validate_pdf(submission: EventSubmission, gemini_client: GeminiClient) -> Li
         pdf_hash=pdf_hash
     )
     
+    # Get event_driven for special handling
+    original_data = getattr(submission, '_original_row_data', row_data)
+    event_driven = original_data.get('event_driven')
+    try:
+        event_driven = int(event_driven) if event_driven is not None else None
+    except (ValueError, TypeError):
+        event_driven = None
+    
     # Map unified results to individual validation results
     # Rule 0: PDF title matches metadata (7 points)
     rule_name, points = PDF_RULES[0]
+    title_match = validation_results.get("title_match", False)
     results.append(ValidationResult(
         criterion=rule_name,
-        passed=validation_results.get("title_match", False),
-        points_awarded=points if validation_results.get("title_match", False) else 0,
-        message="" if validation_results.get("title_match", False) else f"PDF title does not match expected: {expected_title}"
+        passed=title_match,
+        points_awarded=points if title_match else 0,
+        message="" if title_match else f"PDF title does not match expected: {expected_title}"
     ))
+    
+    # SPECIAL CASE: For event_driven=3, if title doesn't match, fail ALL PDF validations
+    if event_driven == 3 and not title_match:
+        logger.warning(f"Event driven 3: Title mismatch detected - failing all PDF validations")
+        # Rule 1: Expert details present (7 points) - FAIL
+        rule_name, points = PDF_RULES[1]
+        results.append(ValidationResult(
+            criterion=rule_name,
+            passed=False,
+            points_awarded=0,
+            message="PDF title mismatch - all PDF validations failed for event_driven=3"
+        ))
+        # Rule 2: Learning outcomes align (3 points) - FAIL
+        rule_name, points = PDF_RULES[2]
+        results.append(ValidationResult(
+            criterion=rule_name,
+            passed=False,
+            points_awarded=0,
+            message="PDF title mismatch - all PDF validations failed for event_driven=3"
+        ))
+        # Rule 3: Objectives match (3 points) - FAIL
+        rule_name, points = PDF_RULES[3]
+        results.append(ValidationResult(
+            criterion=rule_name,
+            passed=False,
+            points_awarded=0,
+            message="PDF title mismatch - all PDF validations failed for event_driven=3"
+        ))
+        # Rule 4: Participant info matches (5 points) - FAIL
+        rule_name, points = PDF_RULES[4]
+        results.append(ValidationResult(
+            criterion=rule_name,
+            passed=False,
+            points_awarded=0,
+            message="PDF title mismatch - all PDF validations failed for event_driven=3"
+        ))
+        return results
     
     # Rule 1: Expert details present (7 points)
     # Use heuristic check first, then AI result
@@ -353,12 +399,14 @@ def validate_pdf(submission: EventSubmission, gemini_client: GeminiClient) -> Li
     ))
     
     # Rule 2: Learning outcomes align (3 points)
+    # SPECIAL CASE: If title doesn't match, learning outcomes should also fail
     rule_name, points = PDF_RULES[2]
+    learning_passed = validation_results.get("learning_outcomes_align", False) and title_match
     results.append(ValidationResult(
         criterion=rule_name,
-        passed=validation_results.get("learning_outcomes_align", False),
-        points_awarded=points if validation_results.get("learning_outcomes_align", False) else 0,
-        message="" if validation_results.get("learning_outcomes_align", False) else "Learning outcomes in PDF do not align with expected outcomes"
+        passed=learning_passed,
+        points_awarded=points if learning_passed else 0,
+        message="" if learning_passed else ("Learning outcomes in PDF do not align with expected outcomes" if title_match else "PDF title mismatch - learning outcomes validation failed")
     ))
     
     # Rule 3: Objectives match (3 points)

@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 LEVEL_DEFINITIONS = {
     1: {
         "event_types": ["Expert Talk", "Mentoring Session", "Exposure Visit"],
-        "duration_range": (2, 4),  # 2 to 4 contact hours
+        "duration_range": (1, 4),  # 1 to 4 contact hours
         "description": "Less than half a day"
     },
     2: {
@@ -198,7 +198,7 @@ def determine_level(event_type: str, duration_hours: Optional[float]) -> Optiona
                     return level
     
     # If event type doesn't match or is empty, determine by duration only
-    if 2 <= duration_hours <= 4:
+    if 1 <= duration_hours <= 4:
         return 1
     elif 5 <= duration_hours <= 8:
         return 2

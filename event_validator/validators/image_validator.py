@@ -138,6 +138,24 @@ def validate_event_mode_matches(
     row_data = submission.row_data
     event_mode = str(row_data.get('Event Mode', '')).strip().lower()
     
+    # Get event_driven for special handling
+    original_data = getattr(submission, '_original_row_data', row_data)
+    event_driven = original_data.get('event_driven')
+    try:
+        event_driven = int(event_driven) if event_driven is not None else None
+    except (ValueError, TypeError):
+        event_driven = None
+    
+    # SPECIAL CASE: Event driven 2 is only online mode - give full score
+    if event_driven == 2:
+        logger.info(f"Event driven 2 detected - automatically passing event mode validation (online mode only)")
+        return ValidationResult(
+            criterion=rule_name,
+            passed=True,
+            points_awarded=points,
+            message="Event driven 2 - online mode only (auto-passed)"
+        )
+    
     if not submission.images:
         return ValidationResult(
             criterion=rule_name,

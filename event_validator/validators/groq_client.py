@@ -242,7 +242,7 @@ class GroqClient:
         Check if title, objectives, and learning outcomes align with theme.
         Returns True if aligned, False otherwise.
         """
-        prompt = f"""You are a validation system. Determine if the following event details align with the specified theme.
+        prompt = f"""You are a validation system. Determine if the following event details are relevant to the specified theme.
 
 Theme: {theme}
 
@@ -250,9 +250,15 @@ Event Title: {title}
 Objectives: {objectives}
 Learning Outcomes: {learning_outcomes}
 
-Task: Determine if the title, objectives, and learning outcomes are semantically aligned with the theme.
+Task: Check if there is RELEVANCY between the event details and the theme. Be LENIENT but not too lenient - accept if there is meaningful relevance or connection to the theme, even if not a perfect match. Reject only if there is clearly no relevance or connection.
 
-Respond with ONLY one word: "YES" if aligned, "NO" if not aligned."""
+Guidelines:
+- Accept if the event is relevant to the theme, even with some variation
+- Accept if key concepts from the theme appear in the event details
+- Accept if the event addresses topics related to the theme
+- Reject only if there is clearly no connection or relevance
+
+Respond with ONLY one word: "YES" if relevant, "NO" if not relevant."""
         
         response = self._call_groq(prompt)
         if not response:

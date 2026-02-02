@@ -76,6 +76,9 @@ def validate_duplicate_detection(
     duplicate_found = False
     duplicate_messages = []
     
+    # Track images within this submission to detect same-submission duplicates
+    submission_image_hashes = set()
+    
     # Check each submission image
     for i, img_data in enumerate(submission.images, 1):
         if not img_data.sha256:
@@ -84,21 +87,32 @@ def validate_duplicate_detection(
         
         logger.debug(f"  Image {i}: Checking SHA256 {img_data.sha256[:16]}...")
         
-        # Step 1: Check batch-level duplicates
+        # Check if this image is a duplicate within the same submission
+        if img_data.sha256 in submission_image_hashes:
+            logger.info(f"  IGNORING: Image {i} is duplicate within same submission (same report) - ignoring")
+            continue  # Skip this image, don't fail validation
+        
+        submission_image_hashes.add(img_data.sha256)
+        
+        # Step 1: Check batch-level duplicates (across different submissions)
         if img_data.sha256 in _batch_hash_tracker:
             # Duplicate found in batch!
-            duplicate_found = True
             previous_submission = _batch_hash_tracker[img_data.sha256]
             previous_id = previous_submission.get('submission_id', 'unknown')
             
-            duplicate_messages.append(
-                f"Image identical to submission {previous_id} (SHA256 match)"
-            )
-            
-            logger.warning(
-                f"  DUPLICATE DETECTED (batch): Image {i} SHA256 {img_data.sha256[:16]}... "
-                f"matches submission {previous_id}"
-            )
+            # Only fail if it's from a different submission
+            if previous_id != submission_id:
+                duplicate_found = True
+                duplicate_messages.append(
+                    f"Image identical to submission {previous_id} (SHA256 match)"
+                )
+                
+                logger.warning(
+                    f"  DUPLICATE DETECTED (batch): Image {i} SHA256 {img_data.sha256[:16]}... "
+                    f"matches submission {previous_id}"
+                )
+            else:
+                logger.info(f"  IGNORING: Image {i} matches previous image in same submission - ignoring")
         else:
             # Step 2: Check directory-level duplicates
             directory_matches = directory_scanner.scan_directory_for_duplicates(
@@ -134,21 +148,26 @@ def validate_duplicate_detection(
             if img_data.phash:
                 for existing_hash, existing_data in _batch_hash_tracker.items():
                     existing_phash = existing_data.get('phash')
+                    existing_submission_id = existing_data.get('submission_id', 'unknown')
                     if existing_phash and existing_phash != img_data.phash:
                         # Calculate Hamming distance
                         distance = hamming_distance(img_data.phash, existing_phash)
                         if distance <= config.duplicate_phash_threshold:
-                            previous_id = existing_data.get('submission_id', 'unknown')
-                            duplicate_found = True
-                            duplicate_messages.append(
-                                f"Image similar to submission {previous_id} "
-                                f"(pHash distance: {distance}, threshold: {config.duplicate_phash_threshold})"
-                            )
-                            logger.warning(
-                                f"  NEAR-DUPLICATE (batch): Image {i} pHash distance {distance} "
-                                f"from submission {previous_id}"
-                            )
-                            break
+                            # Only fail if it's from a different submission
+                            if existing_submission_id != submission_id:
+                                duplicate_found = True
+                                duplicate_messages.append(
+                                    f"Image similar to submission {existing_submission_id} "
+                                    f"(pHash distance: {distance}, threshold: {config.duplicate_phash_threshold})"
+                                )
+                                logger.warning(
+                                    f"  NEAR-DUPLICATE (batch): Image {i} pHash distance {distance} "
+                                    f"from submission {existing_submission_id}"
+                                )
+                                break
+                            else:
+                                logger.info(f"  IGNORING: Image {i} is similar to another image in same submission - ignoring")
+                                break
             
             # Step 4: Store in batch tracker and directory cache
             if not duplicate_found:
