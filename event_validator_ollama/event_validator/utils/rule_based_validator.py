@@ -5,6 +5,27 @@ from typing import Tuple, Set
 
 logger = logging.getLogger(__name__)
 
+# Semantic concept mapping - related terms that should be treated as matching
+THEME_CONCEPT_MAP = {
+    # Innovation & Design Thinking related
+    'innovation': {'ai', 'artificial', 'intelligence', 'technology', 'technological', 'revolution', 'emerging', 'learning', 'machine', 'automation', 'digital', 'smart', 'creative', 'problem', 'solving'},
+    'design': {'thinking', 'creative', 'solution', 'prototype', 'ideation', 'brainstorm', 'user', 'experience'},
+    'thinking': {'reasoning', 'perception', 'cognitive', 'learning', 'problem', 'solving', 'analytical'},
+    
+    # Technology/AI related
+    'technology': {'ai', 'artificial', 'intelligence', 'innovation', 'digital', 'automation', 'computer', 'software', 'hardware'},
+    'artificial': {'intelligence', 'ai', 'machine', 'learning', 'automation', 'computer'},
+    'intelligence': {'ai', 'artificial', 'machine', 'learning', 'reasoning', 'perception', 'cognitive'},
+    
+    # Entrepreneurship related
+    'entrepreneurship': {'startup', 'business', 'venture', 'innovation', 'idea', 'founder', 'incubation'},
+    'startup': {'entrepreneurship', 'business', 'venture', 'innovation', 'incubation', 'funding'},
+    
+    # IPR related
+    'ipr': {'patent', 'intellectual', 'property', 'copyright', 'trademark', 'innovation'},
+    'patent': {'ipr', 'intellectual', 'property', 'innovation', 'invention'},
+}
+
 
 def normalize_text(text: str) -> str:
     """Normalize text by lowercasing and removing special characters."""
@@ -32,38 +53,52 @@ def extract_keywords(text: str, min_length: int = 3) -> Set[str]:
     return keywords
 
 
+def expand_with_concepts(keywords: Set[str]) -> Set[str]:
+    """Expand keywords with semantically related concepts."""
+    expanded = set(keywords)
+    for kw in keywords:
+        if kw in THEME_CONCEPT_MAP:
+            expanded.update(THEME_CONCEPT_MAP[kw])
+    return expanded
+
+
 def check_theme_alignment_rules(title: str, objectives: str, learning_outcomes: str, theme: str) -> Tuple[bool, str]:
     """
-    Check theme alignment using FUZZY keyword substring matching.
+    Check theme alignment using FUZZY keyword matching with semantic concept expansion.
     
     Rules:
-    1. Extract meaningful words from theme (filter stop words)
-    2. Check if each theme keyword appears ANYWHERE in the event text (substring search)
-    3. Pass if 2+ theme keywords found in event data
+    1. Extract keywords from theme and expand with semantic synonyms
+    2. Check if theme keywords (or their synonyms) appear in event text
+    3. Pass if 2+ theme-related keywords found in event data
     
     Returns:
         Tuple[passed: bool, reasoning: str]
     """
-    # Extract theme keywords (filter stop words)
+    # Extract and EXPAND theme keywords with semantic concepts
     theme_keywords = extract_keywords(theme, min_length=3)
+    expanded_theme_keywords = expand_with_concepts(theme_keywords)
     
     # Combine all event data and normalize for substring search
     event_text = f"{title} {objectives} {learning_outcomes}"
-    clean_event_text = normalize_text(event_text)  # Lowercase, remove special chars
+    clean_event_text = normalize_text(event_text)
+    event_keywords = extract_keywords(event_text, min_length=2)  # Allow 2-char like "AI"
     
-    # FUZZY MATCHING: Check if each keyword appears ANYWHERE in the text
-    matches = [kw for kw in theme_keywords if kw in clean_event_text]
+    # FUZZY MATCHING: Check for theme keywords OR their semantic synonyms
+    direct_matches = [kw for kw in theme_keywords if kw in clean_event_text]
+    semantic_matches = [kw for kw in expanded_theme_keywords if kw in event_keywords]
+    
+    all_matches = set(direct_matches) | set(semantic_matches)
     
     if not theme_keywords:
         return True, "Theme has no meaningful keywords - auto-pass"
     
-    # DETERMINISTIC PASS RULE: 2+ keyword matches
-    if len(matches) >= 2:
-        reasoning = f"Found {len(matches)} matching keywords: {', '.join(sorted(matches)[:5])}"
+    # DETERMINISTIC PASS RULE: 2+ keyword matches (direct or semantic)
+    if len(all_matches) >= 2:
+        reasoning = f"Found {len(all_matches)} matching keywords: {', '.join(sorted(list(all_matches)[:6]))}"
         logger.info(f"Theme alignment PASS: {reasoning}")
         return True, reasoning
     else:
-        reasoning = f"Only {len(matches)} matching keyword(s) found (need 2+): {', '.join(matches) if matches else 'none'}"
+        reasoning = f"Only {len(all_matches)} matching keyword(s) found (need 2+): {', '.join(all_matches) if all_matches else 'none'}"
         logger.warning(f"Theme alignment FAIL: {reasoning}")
         return False, reasoning
 
