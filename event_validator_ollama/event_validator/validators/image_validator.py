@@ -1,4 +1,4 @@
-"""Image validation using hardcoded rules and Gemini."""
+"""Image validation using hardcoded rules and Ollama."""
 import logging
 from typing import List, Optional
 from pathlib import Path

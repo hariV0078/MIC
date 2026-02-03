@@ -224,69 +224,37 @@ class CircuitBreaker:
             logger.info(f"Circuit breaker '{self.name}' manually reset")
 
 
-# Global circuit breaker instances
-_gemini_circuit_breaker: Optional[CircuitBreaker] = None
-_groq_circuit_breaker: Optional[CircuitBreaker] = None
+# Global circuit breaker instance
+_ollama_circuit_breaker: Optional[CircuitBreaker] = None
 _circuit_breaker_lock = threading.Lock()
 
 
-def get_gemini_circuit_breaker() -> CircuitBreaker:
-    """Get or create global Gemini circuit breaker."""
-    global _gemini_circuit_breaker
+def get_ollama_circuit_breaker() -> CircuitBreaker:
+    """Get or create global Ollama circuit breaker."""
+    global _ollama_circuit_breaker
     
     with _circuit_breaker_lock:
-        if _gemini_circuit_breaker is None:
+        if _ollama_circuit_breaker is None:
             import os
             # VERY LENIENT defaults: 70% error rate, 10s cooldown, min 20 errors
-            error_threshold = float(os.getenv('GEMINI_CIRCUIT_BREAKER_THRESHOLD', '0.70'))
-            window_duration = float(os.getenv('GEMINI_CIRCUIT_BREAKER_WINDOW', '30'))
-            cooldown_duration = float(os.getenv('GEMINI_CIRCUIT_BREAKER_COOLDOWN', '10'))
-            min_errors = int(os.getenv('GEMINI_CIRCUIT_BREAKER_MIN_ERRORS', '20'))
+            error_threshold = float(os.getenv('OLLAMA_CIRCUIT_BREAKER_THRESHOLD', '0.70'))
+            window_duration = float(os.getenv('OLLAMA_CIRCUIT_BREAKER_WINDOW', '30'))
+            cooldown_duration = float(os.getenv('OLLAMA_CIRCUIT_BREAKER_COOLDOWN', '10'))
+            min_errors = int(os.getenv('OLLAMA_CIRCUIT_BREAKER_MIN_ERRORS', '20'))
             
-            _gemini_circuit_breaker = CircuitBreaker(
+            _ollama_circuit_breaker = CircuitBreaker(
                 error_threshold=error_threshold,
                 window_duration=window_duration,
                 cooldown_duration=cooldown_duration,
                 min_errors_to_open=min_errors,
-                name="gemini"
+                name="ollama"
             )
         
-        return _gemini_circuit_breaker
+        return _ollama_circuit_breaker
 
 
-def get_groq_circuit_breaker() -> CircuitBreaker:
-    """Get or create global Groq circuit breaker."""
-    global _groq_circuit_breaker
-    
+def reset_ollama_circuit_breaker():
+    """Reset Ollama circuit breaker."""
     with _circuit_breaker_lock:
-        if _groq_circuit_breaker is None:
-            import os
-            # VERY LENIENT defaults: 70% error rate, 10s cooldown, min 20 errors
-            error_threshold = float(os.getenv('GROQ_CIRCUIT_BREAKER_THRESHOLD', '0.70'))
-            window_duration = float(os.getenv('GROQ_CIRCUIT_BREAKER_WINDOW', '30'))
-            cooldown_duration = float(os.getenv('GROQ_CIRCUIT_BREAKER_COOLDOWN', '10'))
-            min_errors = int(os.getenv('GROQ_CIRCUIT_BREAKER_MIN_ERRORS', '20'))
-            
-            _groq_circuit_breaker = CircuitBreaker(
-                error_threshold=error_threshold,
-                window_duration=window_duration,
-                cooldown_duration=cooldown_duration,
-                min_errors_to_open=min_errors,
-                name="groq"
-            )
-        
-        return _groq_circuit_breaker
-
-
-def reset_gemini_circuit_breaker():
-    """Reset Gemini circuit breaker."""
-    with _circuit_breaker_lock:
-        if _gemini_circuit_breaker:
-            _gemini_circuit_breaker.reset()
-
-
-def reset_groq_circuit_breaker():
-    """Reset Groq circuit breaker."""
-    with _circuit_breaker_lock:
-        if _groq_circuit_breaker:
-            _groq_circuit_breaker.reset()
+        if _ollama_circuit_breaker:
+            _ollama_circuit_breaker.reset()

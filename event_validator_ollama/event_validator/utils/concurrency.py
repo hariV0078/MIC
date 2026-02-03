@@ -18,86 +18,47 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-# Provider-specific concurrency limits
-# Gemini-2.5-pro supports up to 10 concurrent calls (AFC max remote calls: 10)
-# Using 6 concurrent calls for maximum throughput while staying safe
-GEMINI_MAX_CONCURRENT = int(os.getenv('GEMINI_MAX_CONCURRENT', '6'))  # Increased from 4 to 6
-GROQ_MAX_CONCURRENT = int(os.getenv('GROQ_MAX_CONCURRENT', '1'))
+# Concurrency limits
+OLLAMA_MAX_CONCURRENT = int(os.getenv('OLLAMA_MAX_CONCURRENT', '2'))
 
 # Global semaphores (thread-safe)
-_gemini_semaphore: Optional[threading.Semaphore] = None
-_groq_semaphore: Optional[threading.Semaphore] = None
+_ollama_semaphore: Optional[threading.Semaphore] = None
 _semaphore_lock = threading.Lock()
 
 
-def _get_gemini_semaphore() -> threading.Semaphore:
-    """Get or create Gemini semaphore."""
-    global _gemini_semaphore
+def _get_ollama_semaphore() -> threading.Semaphore:
+    """Get or create Ollama semaphore."""
+    global _ollama_semaphore
     with _semaphore_lock:
-        if _gemini_semaphore is None:
-            _gemini_semaphore = threading.Semaphore(GEMINI_MAX_CONCURRENT)
-            logger.info(f"Gemini concurrency semaphore initialized: max {GEMINI_MAX_CONCURRENT} concurrent calls")
-        return _gemini_semaphore
-
-
-def _get_groq_semaphore() -> threading.Semaphore:
-    """Get or create Groq semaphore."""
-    global _groq_semaphore
-    with _semaphore_lock:
-        if _groq_semaphore is None:
-            _groq_semaphore = threading.Semaphore(GROQ_MAX_CONCURRENT)
-            logger.info(f"Groq concurrency semaphore initialized: max {GROQ_MAX_CONCURRENT} concurrent calls")
-        return _groq_semaphore
+        if _ollama_semaphore is None:
+            _ollama_semaphore = threading.Semaphore(OLLAMA_MAX_CONCURRENT)
+            logger.info(f"Ollama concurrency semaphore initialized: max {OLLAMA_MAX_CONCURRENT} concurrent calls")
+        return _ollama_semaphore
 
 
 @contextmanager
-def gemini_concurrency_guard():
+def ollama_concurrency_guard():
     """
-    Context manager to limit concurrent Gemini API calls.
+    Context manager to limit concurrent Ollama API calls.
     
     Usage:
-        with gemini_concurrency_guard():
-            result = gemini_client.generate(...)
+        with ollama_concurrency_guard():
+            result = ollama_client.generate(...)
     
-    This ensures at most GEMINI_MAX_CONCURRENT calls are in flight at once.
+    This ensures at most OLLAMA_MAX_CONCURRENT calls are in flight at once.
     """
-    semaphore = _get_gemini_semaphore()
+    semaphore = _get_ollama_semaphore()
     acquired = False
     try:
-        logger.debug("Acquiring Gemini concurrency semaphore...")
+        logger.debug("Acquiring Ollama concurrency semaphore...")
         semaphore.acquire()
         acquired = True
-        logger.debug("Gemini concurrency semaphore acquired")
+        logger.debug("Ollama concurrency semaphore acquired")
         yield
     finally:
         if acquired:
             semaphore.release()
-            logger.debug("Gemini concurrency semaphore released")
-
-
-@contextmanager
-def groq_concurrency_guard():
-    """
-    Context manager to limit concurrent Groq API calls.
-    
-    Usage:
-        with groq_concurrency_guard():
-            result = groq_client.generate(...)
-    
-    This ensures at most GROQ_MAX_CONCURRENT calls are in flight at once.
-    """
-    semaphore = _get_groq_semaphore()
-    acquired = False
-    try:
-        logger.debug("Acquiring Groq concurrency semaphore...")
-        semaphore.acquire()
-        acquired = True
-        logger.debug("Groq concurrency semaphore acquired")
-        yield
-    finally:
-        if acquired:
-            semaphore.release()
-            logger.debug("Groq concurrency semaphore released")
+            logger.debug("Ollama concurrency semaphore released")
 
 
 def stagger_request(min_delay: float = 0.1, max_delay: float = 0.4):
@@ -118,23 +79,15 @@ def stagger_request(min_delay: float = 0.1, max_delay: float = 0.4):
 
 def get_concurrency_stats() -> dict:
     """Get current concurrency stats for monitoring."""
-    gemini_sem = _get_gemini_semaphore()
-    groq_sem = _get_groq_semaphore()
-    
-    # Note: _value is internal but useful for debugging
-    # In production, track active calls separately
     return {
-        "gemini_max_concurrent": GEMINI_MAX_CONCURRENT,
-        "groq_max_concurrent": GROQ_MAX_CONCURRENT,
-        "gemini_semaphore_initialized": _gemini_semaphore is not None,
-        "groq_semaphore_initialized": _groq_semaphore is not None
+        "ollama_max_concurrent": OLLAMA_MAX_CONCURRENT,
+        "ollama_semaphore_initialized": _ollama_semaphore is not None
     }
 
 
 def reset_semaphores():
     """Reset semaphores (for testing)."""
-    global _gemini_semaphore, _groq_semaphore
+    global _ollama_semaphore
     with _semaphore_lock:
-        _gemini_semaphore = None
-        _groq_semaphore = None
+        _ollama_semaphore = None
         logger.info("Concurrency semaphores reset")

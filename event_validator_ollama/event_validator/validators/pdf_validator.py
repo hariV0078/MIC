@@ -31,7 +31,7 @@ def validate_pdf_title_match(
     pdf_title = submission.pdf_data.title or ""
     pdf_text = submission.pdf_data.text[:500]  # First 500 chars for title search
     
-    # Use Groq for fuzzy title matching
+    # Use Ollama for fuzzy title matching
     consistency = ollama_client.check_pdf_consistency(
         pdf_text=submission.pdf_data.text,
         expected_title=expected_title,

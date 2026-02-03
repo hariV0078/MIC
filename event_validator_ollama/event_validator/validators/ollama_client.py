@@ -9,8 +9,8 @@ import base64
 from pathlib import Path
 from dotenv import load_dotenv
 from event_validator.utils.rate_limiter import get_rate_limiter
-from event_validator.utils.circuit_breaker import get_gemini_circuit_breaker
-from event_validator.utils.concurrency import gemini_concurrency_guard
+from event_validator.utils.circuit_breaker import get_ollama_circuit_breaker
+from event_validator.utils.concurrency import ollama_concurrency_guard
 
 # Load environment variables from .env file
 load_dotenv()
@@ -175,7 +175,7 @@ class OllamaClient:
             logger.debug(f"Rate limiter applied {delay:.2f}s delay")
         
         # Use concurrency guard
-        with gemini_concurrency_guard():
+        with ollama_concurrency_guard():
             # Retry logic
             last_error = None
             for attempt in range(max_retries):
