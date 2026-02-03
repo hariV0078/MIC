@@ -195,6 +195,7 @@ class OllamaClient:
                             options={
                                 'temperature': 0.1,  # Lower temperature for more consistent validation
                                 'top_p': 0.9,
+                                'num_predict': 120,  # OPTIMIZATION: Cap vision output tokens
                             }
                         )
                     else:
@@ -205,6 +206,7 @@ class OllamaClient:
                             options={
                                 'temperature': 0.1,
                                 'top_p': 0.9,
+                                'num_predict': 80,   # OPTIMIZATION: Cap text output tokens
                             }
                         )
                     

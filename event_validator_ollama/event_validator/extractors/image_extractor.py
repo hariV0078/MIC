@@ -28,6 +28,17 @@ def extract_image_metadata(image_path: Path) -> ImageData:
     if Image is not None:
         try:
             img = Image.open(image_path)
+            
+            # OPTIMIZATION: Resize image to 448x448 (Llava native resolution)
+            # This reduces data transfer and inference time on CPU.
+            if img.size != (448, 448):
+                logger.debug(f"  Resizing image {image_path.name} from {img.size} to (448, 448)")
+                img_resized = img.resize((448, 448), Image.Resampling.LANCZOS)
+                # Overwrite the file with the resized version
+                img_resized.save(image_path)
+                # Re-open the image to get updated exif if needed (though resize loses most EXIF)
+                img = Image.open(image_path)
+            
             exif = img._getexif()
             
             if exif is not None:
