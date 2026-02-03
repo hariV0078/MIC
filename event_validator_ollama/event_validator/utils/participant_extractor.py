@@ -18,14 +18,17 @@ def extract_participant_count_regex(pdf_text: str) -> Tuple[int, str]:
     Returns:
         Tuple[total_count, evidence_string]
     """
-    # Common participant-related keywords
+    # Common participant-related keywords - more flexible patterns
     patterns = [
         r'(\d+)\s*(?:student|students)',
         r'(\d+)\s*(?:faculty|faculties)',
         r'(\d+)\s*(?:participant|participants)',
         r'(\d+)\s*(?:attendee|attendees)',
-        r'(\d+)\s*(?:trainee|trainees)',
-        r'(?:total|overall)[\s:]*(\d+)',
+        r'(\d+)\s*(?:trainee|trainees|learner|learners)',
+        r'(?:total|overall|number)[\s:]+(\d+)',
+        r'(\d+)\s*(?:people|persons|individuals)',
+        r'(?:students|faculty|participants)[\s:]+(\d+)',  # Reverse pattern
+        r'(\d+)\s+(?:UG|PG|undergraduate|postgraduate)',  # Academic formats
     ]
     
     found_numbers = []

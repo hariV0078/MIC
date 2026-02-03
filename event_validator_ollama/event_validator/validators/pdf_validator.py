@@ -411,12 +411,23 @@ def validate_pdf(submission: EventSubmission, ollama_client: OllamaClient) -> Li
     ))
     
     # Rule 3: Objectives match (3 points)
+    # Use RULE-BASED validation instead of AI
     rule_name, points = PDF_RULES[3]
+    
+    from event_validator.utils.rule_based_validator import check_objectives_alignment_rules
+    
+    # Extract objectives from PDF (first 2000 chars likely contain them)
+    pdf_objectives_section = pdf_text[:2000]
+    objectives_aligned, obj_reasoning = check_objectives_alignment_rules(
+        pdf_objectives=pdf_objectives_section,
+        expected_objectives=expected_objectives
+    )
+    
     results.append(ValidationResult(
         criterion=rule_name,
-        passed=validation_results.get("objectives_match", False),
-        points_awarded=points if validation_results.get("objectives_match", False) else 0,
-        message="" if validation_results.get("objectives_match", False) else f"Objectives in PDF do not match expected objectives. Evidence: {reasoning}"
+        passed=objectives_aligned,
+        points_awarded=points if objectives_aligned else 0,
+        message="" if objectives_aligned else f"Objectives mismatch. {obj_reasoning}"
     ))
     
     # Rule 4: Participant info matches (5 points)

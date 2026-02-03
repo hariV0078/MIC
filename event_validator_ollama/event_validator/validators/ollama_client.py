@@ -253,47 +253,17 @@ class OllamaClient:
         prefer_groq: bool = False
     ) -> tuple[bool, str]:
         """
-        Check if title/objectives align with theme using keyword boolean matching.
+        Check if title/objectives align with theme using RULE-BASED keyword matching.
+        NO AI REASONING - Pure Python logic.
         Returns Tuple[aligned: bool, reasoning: str]
         """
-        # Extract theme keywords
-        theme_lower = theme.lower()
-        theme_keywords = set(re.findall(r'\b\w{3,}\b', theme_lower))
+        from event_validator.utils.rule_based_validator import check_theme_alignment_rules
         
-        # Combine all event data
-        event_data = f"{title} {objectives} {learning_outcomes}".lower()
+        # Use rule-based validation (no AI inference)
+        aligned, reasoning = check_theme_alignment_rules(title, objectives, learning_outcomes, theme)
         
-        prompt = f"""TASK: Check if Event mentions Theme keywords.
-
-THEME: {theme}
-KEYWORDS TO FIND: {', '.join(list(theme_keywords)[:10])}
-
-EVENT DATA:
-{title}
-{objectives[:200]}
-{learning_outcomes[:200]}
-
-STEPS:
-1. List which keywords from THEME appear in EVENT DATA
-2. If you found 2+ keywords, verdict is YES
-3. If you found 0-1 keywords, verdict is NO
-
-FORMAT:
-FOUND_KEYWORDS: [list them]
-VERDICT: YES or NO
-REASONING: Quote where you found the keywords"""
-        
-        response = self._call_ollama(prompt, use_cache=True)
-        if response:
-            verdict = "VERDICT: YES" in response.upper()
-            reasoning = ""
-            for line in response.split('\n'):
-                if 'REASONING:' in line.upper() or 'FOUND' in line:
-                    reasoning = line.split(':', 1)[1].strip() if ':' in line else line
-                    break
-            return verdict, reasoning or "No keywords found"
-        
-        return False, "Theme alignment check failed"
+        logger.info(f"Rule-based theme validation: {aligned} - {reasoning}")
+        return aligned, reasoning
     
     def check_pdf_consistency(
         self,
