@@ -420,13 +420,45 @@ def validate_pdf(submission: EventSubmission, ollama_client: OllamaClient) -> Li
     ))
     
     # Rule 4: Participant info matches (5 points)
+    # HYBRID APPROACH: Try regex first, then use AI result as fallback
     rule_name, points = PDF_RULES[4]
-    results.append(ValidationResult(
-        criterion=rule_name,
-        passed=validation_results.get("participants_valid", False),
-        points_awarded=points if validation_results.get("participants_valid", False) else 0,
-        message="" if validation_results.get("participants_valid", False) else f"PDF participant information does not match expected (needs 15+ participants). Found: {reasoning}"
-    ))
+    
+    # Import regex extractor
+    from event_validator.utils.participant_extractor import extract_participant_count_regex
+    
+    # Try regex extraction first (more reliable for numbers)
+    regex_count, regex_evidence = extract_participant_count_regex(pdf_text)
+    
+    if regex_count >= 15:
+        # Regex found sufficient participants - trust it
+        logger.info(f"Regex participant check PASSED: {regex_count} >= 15")
+        results.append(ValidationResult(
+            criterion=rule_name,
+            passed=True,
+            points_awarded=points,
+            message=""
+        ))
+    else:
+        # Regex didn't find enough - check AI result as fallback
+        ai_passed = validation_results.get("participants_valid", False)
+        if ai_passed:
+            logger.info("AI participant check PASSED (regex found insufficient)")
+            results.append(ValidationResult(
+                criterion=rule_name,
+                passed=True,
+                points_awarded=points,
+                message=""
+            ))
+        else:
+            # Both regex and AI failed
+            combined_evidence = f"Regex: {regex_evidence}; AI: {reasoning}" if regex_evidence else reasoning
+            logger.warning(f"Participant check FAILED. Regex count: {regex_count}, AI: {ai_passed}")
+            results.append(ValidationResult(
+                criterion=rule_name,
+                passed=False,
+                points_awarded=0,
+                message=f"PDF participant information does not match expected (needs 15+ participants). Found: {combined_evidence}"
+            ))
     
     logger.debug(f"PDF validation complete. Reasoning: {validation_results.get('reasoning', 'N/A')}")
     

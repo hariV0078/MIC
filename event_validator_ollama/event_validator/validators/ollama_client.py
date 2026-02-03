@@ -253,39 +253,45 @@ class OllamaClient:
         prefer_groq: bool = False
     ) -> tuple[bool, str]:
         """
-        Check if title/objectives align with theme using extractive keyword verification.
+        Check if title/objectives align with theme using keyword boolean matching.
         Returns Tuple[aligned: bool, reasoning: str]
         """
-        # Create a simple keyword list for the prompt
-        theme_keywords = ", ".join(set(re.findall(r'\w{4,}', theme.lower())))
+        # Extract theme keywords
+        theme_lower = theme.lower()
+        theme_keywords = set(re.findall(r'\b\w{3,}\b', theme_lower))
         
-        prompt = f"""You are an EXTRACTIVE validation bot.
-TASK: Verify if the Event relates to the Theme: "{theme}"
+        # Combine all event data
+        event_data = f"{title} {objectives} {learning_outcomes}".lower()
+        
+        prompt = f"""TASK: Check if Event mentions Theme keywords.
+
+THEME: {theme}
+KEYWORDS TO FIND: {', '.join(list(theme_keywords)[:10])}
 
 EVENT DATA:
-- Title: {title}
-- Objectives: {objectives}
-- Outcomes: {learning_outcomes}
-- Theme Keywords to find: {theme_keywords}
+{title}
+{objectives[:200]}
+{learning_outcomes[:200]}
 
-DIRECTIONS:
-1. List any keywords from the Theme that appear or relate to the Event Data.
-2. If the Event Data mentions specific technology, skills, or concepts from the Theme Keywords, the verdict is YES.
-3. Be helpful but strict: if there is no mention of the theme's core topics, the verdict is NO.
+STEPS:
+1. List which keywords from THEME appear in EVENT DATA
+2. If you found 2+ keywords, verdict is YES
+3. If you found 0-1 keywords, verdict is NO
 
-Return your answer in this exact format:
+FORMAT:
+FOUND_KEYWORDS: [list them]
 VERDICT: YES or NO
-REASONING: <Quote the specific words that link the event to the theme>"""
+REASONING: Quote where you found the keywords"""
         
         response = self._call_ollama(prompt, use_cache=True)
         if response:
             verdict = "VERDICT: YES" in response.upper()
             reasoning = ""
             for line in response.split('\n'):
-                if 'REASONING:' in line.upper():
-                    reasoning = line.split(':', 1)[1].strip() if ':' in line else ""
+                if 'REASONING:' in line.upper() or 'FOUND' in line:
+                    reasoning = line.split(':', 1)[1].strip() if ':' in line else line
                     break
-            return verdict, reasoning
+            return verdict, reasoning or "No keywords found"
         
         return False, "Theme alignment check failed"
     
@@ -397,56 +403,66 @@ REASONING: <Quote the exact sentence used as evidence>"""
             "reasoning": ""
         }
         
-        # Prepare extractive search context
+        # Prepare extractive search with STRICT step-by-step instructions
         expected_title_clean = re.sub(r'[^a-zA-Z0-9\s]', '', (expected_title or "").lower())
-        title_keywords = " ".join([w for w in expected_title_clean.split() if len(w) > 3])
+        title_keywords = " ".join([w for w in expected_title_clean.split() if len(w) > 3])[:100]
 
-        prompt = f"""You are an EXTRACTIVE validation system. Search for EVIDENCE in the PDF text.
+        prompt = f"""ROLE: Data Extraction Bot. Be literal.
 
-EXPECTED DATA:
-- Expected Title Keywords: {title_keywords}
-- Expected Objectives/Outcomes: {expected_objectives or 'N/A'}
+TASK: Extract specific information from PDF text.
+
+EXPECTED VALUES:
+- Title Keywords: {title_keywords}
+- Objectives: {(expected_objectives or 'N/A')[:150]}
 - Min Participants: 15
 
-PDF TEXT (EXTRACT):
+PDF TEXT:
 ---
 {pdf_text[:6000]}
 ---
 
-ANALYSIS DIRECTIONS:
-1. FIND THE TITLE: Quote the title found in the PDF. Is it similar to the expected title?
-2. FIND THE EXPERT: Quote any names of speakers, faculty, or guests found.
-3. FIND OBJECTIVES: Quote the sentence(s) mentioning goals or outcomes.
-4. FIND NUMBERS: List all numbers found in the text related to counts of people.
+STEP-BY-STEP INSTRUCTIONS:
+1. TITLE: Find the title in PDF. Does it contain words from "{title_keywords}"?
+2. EXPERT: Find names of people (speakers, faculty, trainers)
+3. OBJECTIVES: Find sentences about goals/outcomes. Do they match "{(expected_objectives or 'N/A')[:80]}"?
+4. PARTICIPANTS: Find numbers near 'student', 'faculty', 'participant'. List all numbers.
 
-DECISION RULES:
-- TITLE_MATCH: YES if you quoted a title that contains keywords from "{title_keywords}".
-- EXPERT_DETAILS: YES if you quoted any human names.
-- OBJECTIVES_MATCH: YES if you quoted a sentence that matches the intent of "{expected_objectives}".
-- LEARNING_OUTCOMES_ALIGN: YES if objectives match.
-- PARTICIPANTS_VALID: YES if any quoted number is >= 15.
-
-Return EVERY line exactly as shown:
+OUTPUT (exact format):
 TITLE_MATCH: YES/NO
 EXPERT_DETAILS: YES/NO
 LEARNING_OUTCOMES_ALIGN: YES/NO
 OBJECTIVES_MATCH: YES/NO
 PARTICIPANTS_VALID: YES/NO
-REASONING: <Direct Quote from PDF serving as evidence>"""
+EVIDENCE: <Quote 1-2 sentences you found>"""
         
         response = self._call_ollama(prompt, use_cache=True)
         if not response:
             logger.warning("Comprehensive PDF validation failed")
             return results
         
-        # Parse and cache the response
-        parsed_results = self._parse_pdf_validation_response(response)
+        # Parse response - look for EVIDENCE or REASONING
+        for line in response.split('\n'):
+            line = line.strip()
+            if 'TITLE_MATCH:' in line:
+                results["title_match"] = "YES" in line.upper()
+            elif 'EXPERT_DETAILS:' in line:
+                results["expert_details_present"] = "YES" in line.upper()
+            elif 'LEARNING_OUTCOMES_ALIGN:' in line:
+                results["learning_outcomes_align"] = "YES" in line.upper()
+            elif 'OBJECTIVES_MATCH:' in line:
+                results["objectives_match"] = "YES" in line.upper()
+            elif 'PARTICIPANTS_VALID:' in line:
+                results["participants_valid"] = "YES" in line.upper()
+            elif 'EVIDENCE:' in line or 'REASONING:' in line:
+                results["reasoning"] = line.split(':', 1)[1].strip() if ':' in line else line
+        
+        # Cache if needed
         if cache_key:
             _ollama_response_cache[cache_key] = response
-            _ollama_parsed_cache[cache_key] = parsed_results
+            _ollama_parsed_cache[cache_key] = results
             logger.debug(f"Cached PDF validation results with key: {cache_key[:16]}...")
         
-        return parsed_results
+        return results
     
     def _parse_pdf_validation_response(self, response: str) -> Dict[str, Any]:
         """Parse the unified PDF validation response."""
