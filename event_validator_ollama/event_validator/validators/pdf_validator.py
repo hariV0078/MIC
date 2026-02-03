@@ -343,11 +343,12 @@ def validate_pdf(submission: EventSubmission, ollama_client: OllamaClient) -> Li
     # Rule 0: PDF title matches metadata (7 points)
     rule_name, points = PDF_RULES[0]
     title_match = validation_results.get("title_match", False)
+    reasoning = validation_results.get("reasoning", "")
     results.append(ValidationResult(
         criterion=rule_name,
         passed=title_match,
         points_awarded=points if title_match else 0,
-        message="" if title_match else f"PDF title does not match expected: {expected_title}"
+        message="" if title_match else f"PDF title does not match expected: {expected_title}. Reason: {reasoning}"
     ))
     
     # SPECIAL CASE: For event_driven=3, if title doesn't match, fail ALL PDF validations
@@ -395,7 +396,7 @@ def validate_pdf(submission: EventSubmission, ollama_client: OllamaClient) -> Li
         criterion=rule_name,
         passed=expert_passed,
         points_awarded=points if expert_passed else 0,
-        message="" if expert_passed else "Expert details not found in PDF"
+        message="" if expert_passed else f"Expert details not found in PDF. Evidence: {reasoning}"
     ))
     
     # Rule 2: Learning outcomes align (3 points)
@@ -406,7 +407,7 @@ def validate_pdf(submission: EventSubmission, ollama_client: OllamaClient) -> Li
         criterion=rule_name,
         passed=learning_passed,
         points_awarded=points if learning_passed else 0,
-        message="" if learning_passed else ("Learning outcomes in PDF do not align with expected outcomes" if title_match else "PDF title mismatch - learning outcomes validation failed")
+        message="" if learning_passed else (f"Learning outcomes in PDF do not align with expected outcomes. Reason: {reasoning}" if title_match else "PDF title mismatch - learning outcomes validation failed")
     ))
     
     # Rule 3: Objectives match (3 points)
@@ -415,7 +416,7 @@ def validate_pdf(submission: EventSubmission, ollama_client: OllamaClient) -> Li
         criterion=rule_name,
         passed=validation_results.get("objectives_match", False),
         points_awarded=points if validation_results.get("objectives_match", False) else 0,
-        message="" if validation_results.get("objectives_match", False) else "Objectives in PDF do not match expected objectives"
+        message="" if validation_results.get("objectives_match", False) else f"Objectives in PDF do not match expected objectives. Evidence: {reasoning}"
     ))
     
     # Rule 4: Participant info matches (5 points)
@@ -424,7 +425,7 @@ def validate_pdf(submission: EventSubmission, ollama_client: OllamaClient) -> Li
         criterion=rule_name,
         passed=validation_results.get("participants_valid", False),
         points_awarded=points if validation_results.get("participants_valid", False) else 0,
-        message="" if validation_results.get("participants_valid", False) else f"PDF participant information does not match expected (needs 15+ participants)"
+        message="" if validation_results.get("participants_valid", False) else f"PDF participant information does not match expected (needs 15+ participants). Found: {reasoning}"
     ))
     
     logger.debug(f"PDF validation complete. Reasoning: {validation_results.get('reasoning', 'N/A')}")

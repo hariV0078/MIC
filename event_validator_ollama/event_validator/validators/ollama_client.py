@@ -250,36 +250,44 @@ class OllamaClient:
         objectives: str,
         learning_outcomes: str,
         theme: str,
-        prefer_groq: bool = False  # Kept for interface compatibility
-    ) -> bool:
+        prefer_groq: bool = False
+    ) -> tuple[bool, str]:
         """
-        Check if title, objectives, and learning outcomes align with theme.
-        Returns True if aligned, False otherwise.
+        Check if title/objectives align with theme using extractive keyword verification.
+        Returns Tuple[aligned: bool, reasoning: str]
         """
-        prompt = f"""You are a semantic validation system. 
-Task: Determine if the Event Details align with the specific Theme provided.
+        # Create a simple keyword list for the prompt
+        theme_keywords = ", ".join(set(re.findall(r'\w{4,}', theme.lower())))
+        
+        prompt = f"""You are an EXTRACTIVE validation bot.
+TASK: Verify if the Event relates to the Theme: "{theme}"
 
-Theme: {theme}
+EVENT DATA:
+- Title: {title}
+- Objectives: {objectives}
+- Outcomes: {learning_outcomes}
+- Theme Keywords to find: {theme_keywords}
 
-Event Title: {title}
-Objectives: {objectives}
-Learning Outcomes: {learning_outcomes}
+DIRECTIONS:
+1. List any keywords from the Theme that appear or relate to the Event Data.
+2. If the Event Data mentions specific technology, skills, or concepts from the Theme Keywords, the verdict is YES.
+3. Be helpful but strict: if there is no mention of the theme's core topics, the verdict is NO.
 
-Reasoning Steps:
-1. Identify the core concepts of the theme.
-2. Check if the event title or learning outcomes address these concepts (directly or as sub-topics).
-3. Minor variations in wording are acceptable. If they are semantically related, they align.
-
-Return YOUR FINAL VERDICT in this exact format:
-VERDICT: YES (if aligned) or NO (if no connection)
-REASONING: <brief evidence or explanation on why it aligns or why not>"""
+Return your answer in this exact format:
+VERDICT: YES or NO
+REASONING: <Quote the specific words that link the event to the theme>"""
         
         response = self._call_ollama(prompt, use_cache=True)
         if response:
-            return "VERDICT: YES" in response.upper()
+            verdict = "VERDICT: YES" in response.upper()
+            reasoning = ""
+            for line in response.split('\n'):
+                if 'REASONING:' in line.upper():
+                    reasoning = line.split(':', 1)[1].strip() if ':' in line else ""
+                    break
+            return verdict, reasoning
         
-        logger.warning("Theme alignment check failed")
-        return False
+        return False, "Theme alignment check failed"
     
     def check_pdf_consistency(
         self,
@@ -288,43 +296,41 @@ REASONING: <brief evidence or explanation on why it aligns or why not>"""
         expected_objectives: Optional[str],
         expected_learning_outcomes: Optional[str],
         expected_participants: Optional[int]
-    ) -> Dict[str, bool]:
+    ) -> Dict[str, Any]:
         """
         Check PDF text for consistency with expected values.
-        Returns dict with keys: title_match, objectives_match, learning_match, participants_valid
+        Returns dict with keys: title_match, objectives_match, learning_match, participants_valid, reasoning
         """
         results = {
             "title_match": False,
             "objectives_match": False,
             "learning_match": False,
-            "participants_valid": False
+            "participants_valid": False,
+            "reasoning": ""
         }
         
-        prompt = f"""You are a validation system. Analyze the following PDF text and check consistency.
+        prompt = f"""You are an EXTRACTIVE validation system. Search for EVIDENCE in the PDF text.
 
-PDF Text:
-{pdf_text[:2500]}
+EXPECTED DATA:
+- Title: {expected_title or 'N/A'}
+- Objectives: {expected_objectives or 'N/A'}
+- Outcomes: {expected_learning_outcomes or 'N/A'}
+- Min Participants: 15
 
-Expected Title: {expected_title or 'Not provided'}
-Expected Objectives: {expected_objectives or 'Not provided'}
-Expected Learning Outcomes: {expected_learning_outcomes or 'Not provided'}
-Expected Participants: {expected_participants or 'Not provided'}
+PDF TEXT (EXTRACT):
+---
+{pdf_text[:4000]}
+---
 
-Task: Check if:
-1. PDF title matches expected title (SIMILARITY IS ACCEPTABLE - exact match not required. Accept if titles are semantically similar, have similar meaning, or contain key words from expected title. Minor variations in wording, word order, or formatting are acceptable.)
-2. PDF objectives match expected objectives
-3. PDF learning outcomes match expected learning outcomes
-4. PDF contains participant information indicating 15+ participants
-
-Respond in this exact format (one line per check):
-TITLE_MATCH: YES or NO
-OBJECTIVES_MATCH: YES or NO
-LEARNING_MATCH: YES or NO
-PARTICIPANTS_VALID: YES or NO"""
+Return ONLY these exact lines:
+TITLE_MATCH: YES/NO
+OBJECTIVES_MATCH: YES/NO
+LEARNING_MATCH: YES/NO
+PARTICIPANTS_VALID: YES/NO
+REASONING: <Quote the exact sentence used as evidence>"""
         
         response = self._call_ollama(prompt)
         if not response:
-            logger.warning("PDF consistency check failed")
             return results
         
         # Parse response
@@ -338,6 +344,8 @@ PARTICIPANTS_VALID: YES or NO"""
                 results["learning_match"] = "YES" in line.upper()
             elif 'PARTICIPANTS_VALID:' in line:
                 results["participants_valid"] = "YES" in line.upper()
+            elif 'REASONING:' in line:
+                results["reasoning"] = line.split(':', 1)[1].strip() if ':' in line else ""
         
         return results
     
@@ -389,24 +397,34 @@ PARTICIPANTS_VALID: YES or NO"""
             "reasoning": ""
         }
         
-        prompt = f"""You are a high-precision validation system. Analyze the PDF text and verify against expected values.
+        # Prepare extractive search context
+        expected_title_clean = re.sub(r'[^a-zA-Z0-9\s]', '', (expected_title or "").lower())
+        title_keywords = " ".join([w for w in expected_title_clean.split() if len(w) > 3])
 
-Expected Data:
-- Title: {expected_title or 'N/A'}
-- Objectives: {expected_objectives or 'N/A'}
-- Learning Outcomes: {expected_learning_outcomes or 'N/A'}
+        prompt = f"""You are an EXTRACTIVE validation system. Search for EVIDENCE in the PDF text.
+
+EXPECTED DATA:
+- Expected Title Keywords: {title_keywords}
+- Expected Objectives/Outcomes: {expected_objectives or 'N/A'}
 - Min Participants: 15
 
-PDF Content (Extract):
+PDF TEXT (EXTRACT):
 ---
 {pdf_text[:6000]}
 ---
 
-Analysis Task:
-1. Does the title in the PDF mean the same as the expected Title? (SEMANTIC MATCH = YES, exact wording not required)
-2. Search for speaker names, facilitators, or faculty designations to confirm Expert Details.
-3. Check if objectives or learning outcomes in PDF cover the same topics/goals as expected. (SEMANTIC MATCH = YES)
-4. Find participant numbers. If you see multiple groups (e.g., 100 students + 15 faculty), sum them. If total >= 15, PARTICIPANTS_VALID is YES.
+ANALYSIS DIRECTIONS:
+1. FIND THE TITLE: Quote the title found in the PDF. Is it similar to the expected title?
+2. FIND THE EXPERT: Quote any names of speakers, faculty, or guests found.
+3. FIND OBJECTIVES: Quote the sentence(s) mentioning goals or outcomes.
+4. FIND NUMBERS: List all numbers found in the text related to counts of people.
+
+DECISION RULES:
+- TITLE_MATCH: YES if you quoted a title that contains keywords from "{title_keywords}".
+- EXPERT_DETAILS: YES if you quoted any human names.
+- OBJECTIVES_MATCH: YES if you quoted a sentence that matches the intent of "{expected_objectives}".
+- LEARNING_OUTCOMES_ALIGN: YES if objectives match.
+- PARTICIPANTS_VALID: YES if any quoted number is >= 15.
 
 Return EVERY line exactly as shown:
 TITLE_MATCH: YES/NO
@@ -414,7 +432,7 @@ EXPERT_DETAILS: YES/NO
 LEARNING_OUTCOMES_ALIGN: YES/NO
 OBJECTIVES_MATCH: YES/NO
 PARTICIPANTS_VALID: YES/NO
-REASONING: <brief one-line evidence found in the text>"""
+REASONING: <Direct Quote from PDF serving as evidence>"""
         
         response = self._call_ollama(prompt, use_cache=True)
         if not response:
@@ -501,31 +519,31 @@ REASONING: <brief one-line evidence found in the text>"""
             logger.error("Ollama client not available for image analysis")
             return results
         
-        # Build comprehensive prompt for vision analysis
-        prompt = f"""You are analyzing an event photograph for validation purposes.
+        # Build extractive prompt for vision analysis
+        prompt = f"""You are an EXTRACTIVE vision bot. 
+- Expected Event Title: {event_title or 'N/A'}
+- Expected Mode: {event_mode or 'N/A'}
 
-Event Context:
-- Title: {event_title or 'Not specified'}
-- Theme: {event_theme or 'Not specified'}
-- Expected Mode: {event_mode or 'Not specified'}
+DIRECTIONS:
+1. DESCRIPTIVE SCAN: List the primary objects (e.g., "people", "laptop", "stage", "poster").
+2. TEXT SCAN: Read any text from banners/posters. Does it relate to the Title?
+3. PEOPLE COUNT: Count the humans visible.
 
-Task: Analyze the image and determine:
-1. Does the image show a banner or poster with text? If yes, does the banner text match the event title/theme?
-2. Does the image depict a real event/activity (not stock photo, not staged, not just a poster)?
-3. Does the event mode (online/offline) match what's visible in the image?
-   - Online: screens, video calls, virtual backgrounds, remote participants
-   - Offline: physical venue, in-person attendees, physical setup
-4. How many participants are visible? Provide an estimate.
-5. Is this clearly a real event scene with actual activity?
+DECISION RULES:
+- HAS_BANNER: YES if any poster/banner/flyer is visible.
+- BANNER_TEXT_MATCHES: YES if the visible banner text contains words from "{event_title}".
+- IS_REAL_EVENT: YES if you see people or a venue setup.
+- MODE_MATCHES: YES if "{event_mode}" is "online" and you see screens, OR if "{event_mode}" is "offline" and you see a physical venue.
+- HAS_15_PLUS_PARTICIPANTS: YES if human count >= 15.
 
-Respond in this exact format:
+FORMAT:
 HAS_BANNER: YES or NO
 BANNER_TEXT_MATCHES: YES or NO
 IS_REAL_EVENT: YES or NO
 MODE_MATCHES: YES or NO
 PARTICIPANT_COUNT: <number>
 HAS_15_PLUS_PARTICIPANTS: YES or NO
-REASONING: <brief explanation>"""
+REASONING: <Detailed evidence seen in image>"""
         
         response = self._call_ollama(prompt, image_path=image_path, use_cache=False)
         if not response:

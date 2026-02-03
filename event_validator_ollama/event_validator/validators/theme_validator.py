@@ -80,7 +80,7 @@ def validate_theme_alignment(
     # Use Ollama for semantic alignment check
     logger.debug("  Calling API for theme alignment check...")
     logger.debug(f"  Using event title for theme check: {event_title_for_check[:100] if event_title_for_check else 'N/A'}")
-    aligned = ollama_client.check_theme_alignment(
+    aligned, reasoning = ollama_client.check_theme_alignment(
         title=event_title_for_check,
         objectives=objectives,
         learning_outcomes=learning_outcomes,
@@ -99,7 +99,7 @@ def validate_theme_alignment(
         # Format audit-ready failure message
         # Use activity_name as the observed title since it's the primary event title field
         observed_title = activity_name or user_title
-        failure_reason = "Content does not semantically align with declared theme"
+        failure_reason = f"Content does not semantically align with declared theme. Evidence found: {reasoning}" if reasoning else "Content does not semantically align with declared theme"
         message = format_title_validation_message(
             event_driven=event_driven,
             expected_title=expected_title,

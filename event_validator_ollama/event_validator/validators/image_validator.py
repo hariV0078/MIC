@@ -73,6 +73,7 @@ def validate_banner_poster_visible(
             message="Image analysis not provided"
         )
     
+    reasoning = analysis.get("detailed_reasoning", "")
     if analysis.get("has_banner", False):
         return ValidationResult(
             criterion=rule_name,
@@ -85,7 +86,7 @@ def validate_banner_poster_visible(
             criterion=rule_name,
             passed=False,
             points_awarded=0,
-            message="Banner or poster not visible in images"
+            message=f"Banner or poster not visible in images. Evidence: {reasoning}" if reasoning else "Banner or poster not visible in images"
         )
 
 
@@ -112,6 +113,7 @@ def validate_real_activity_scene(
             message="Image analysis not provided"
         )
     
+    reasoning = analysis.get("detailed_reasoning", "")
     if analysis.get("is_real_event", False):
         return ValidationResult(
             criterion=rule_name,
@@ -124,7 +126,7 @@ def validate_real_activity_scene(
             criterion=rule_name,
             passed=False,
             points_awarded=0,
-            message="Image does not depict a real event activity"
+            message=f"Image does not depict a real event activity. Evidence: {reasoning}" if reasoning else "Image does not depict a real event activity"
         )
 
 
@@ -172,6 +174,7 @@ def validate_event_mode_matches(
             message="Image analysis not provided"
         )
     
+    reasoning = analysis.get("detailed_reasoning", "")
     if analysis.get("mode_matches", False):
         return ValidationResult(
             criterion=rule_name,
@@ -184,7 +187,7 @@ def validate_event_mode_matches(
             criterion=rule_name,
             passed=False,
             points_awarded=0,
-            message=f"Event mode in image does not match specified mode: {event_mode}"
+            message=f"Event mode mismatch: {event_mode}. Evidence: {reasoning}" if reasoning else f"Event mode in image does not match specified mode: {event_mode}"
         )
 
 
@@ -211,6 +214,7 @@ def validate_15_plus_participants_visible(
             message="Image analysis not provided"
         )
     
+    reasoning = analysis.get("detailed_reasoning", "")
     if analysis.get("has_15_plus_participants", False):
         return ValidationResult(
             criterion=rule_name,
@@ -223,7 +227,7 @@ def validate_15_plus_participants_visible(
             criterion=rule_name,
             passed=False,
             points_awarded=0,
-            message="15+ participants not visible in images"
+            message=f"15+ participants not visible. Evidence: {reasoning}" if reasoning else "15+ participants not visible in images"
         )
 
 
