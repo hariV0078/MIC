@@ -206,7 +206,7 @@ class OllamaClient:
                             options={
                                 'temperature': 0.1,
                                 'top_p': 0.9,
-                                'num_predict': 80,   # OPTIMIZATION: Cap text output tokens
+                                'num_predict': 512,   # INCREASED: Allow for CoT reasoning
                             }
                         )
                     
@@ -256,7 +256,8 @@ class OllamaClient:
         Check if title, objectives, and learning outcomes align with theme.
         Returns True if aligned, False otherwise.
         """
-        prompt = f"""You are a validation system. Determine if the following event details are relevant to the specified theme.
+        prompt = f"""You are a semantic validation system. 
+Task: Determine if the Event Details align with the specific Theme provided.
 
 Theme: {theme}
 
@@ -264,19 +265,18 @@ Event Title: {title}
 Objectives: {objectives}
 Learning Outcomes: {learning_outcomes}
 
-Task: Check if there is RELEVANCY between the event details and the theme. Be LENIENT but not too lenient - accept if there is meaningful relevance or connection to the theme, even if not a perfect match. Reject only if there is clearly no relevance or connection.
+Reasoning Steps:
+1. Identify the core concepts of the theme.
+2. Check if the event title or learning outcomes address these concepts (directly or as sub-topics).
+3. Minor variations in wording are acceptable. If they are semantically related, they align.
 
-Guidelines:
-- Accept if the event is relevant to the theme, even with some variation
-- Accept if key concepts from the theme appear in the event details
-- Accept if the event addresses topics related to the theme
-- Reject only if there is clearly no connection or relevance
-
-Respond with ONLY one word: "YES" if relevant, "NO" if not relevant."""
+Return YOUR FINAL VERDICT in this exact format:
+VERDICT: YES (if aligned) or NO (if no connection)
+REASONING: <brief evidence or explanation on why it aligns or why not>"""
         
         response = self._call_ollama(prompt, use_cache=True)
         if response:
-            return "YES" in response.upper()
+            return "VERDICT: YES" in response.upper()
         
         logger.warning("Theme alignment check failed")
         return False
@@ -389,30 +389,32 @@ PARTICIPANTS_VALID: YES or NO"""
             "reasoning": ""
         }
         
-        prompt = f"""You are a validation system. Analyze the following PDF text and check all validation criteria.
+        prompt = f"""You are a high-precision validation system. Analyze the PDF text and verify against expected values.
 
-PDF Text:
-{pdf_text[:2500]}
+Expected Data:
+- Title: {expected_title or 'N/A'}
+- Objectives: {expected_objectives or 'N/A'}
+- Learning Outcomes: {expected_learning_outcomes or 'N/A'}
+- Min Participants: 15
 
-Expected Title: {expected_title or 'Not provided'}
-Expected Objectives: {expected_objectives or 'Not provided'}
-Expected Learning Outcomes: {expected_learning_outcomes or 'Not provided'}
-Expected Participants: {expected_participants or 'Not provided'}
+PDF Content (Extract):
+---
+{pdf_text[:6000]}
+---
 
-Task: Check ALL of the following:
-1. Does the PDF title match the expected title? (SIMILARITY IS ACCEPTABLE - exact match not required)
-2. Are expert details present in the PDF? (Look for expert names, speaker information, facilitator details)
-3. Do the learning outcomes in the PDF align with expected learning outcomes?
-4. Do the objectives in the PDF match the expected objectives?
-5. Does the PDF contain participant information indicating 15+ participants?
+Analysis Task:
+1. Does the title in the PDF mean the same as the expected Title? (SEMANTIC MATCH = YES, exact wording not required)
+2. Search for speaker names, facilitators, or faculty designations to confirm Expert Details.
+3. Check if objectives or learning outcomes in PDF cover the same topics/goals as expected. (SEMANTIC MATCH = YES)
+4. Find participant numbers. If you see multiple groups (e.g., 100 students + 15 faculty), sum them. If total >= 15, PARTICIPANTS_VALID is YES.
 
-Respond in this EXACT format (one line per check):
-TITLE_MATCH: YES or NO
-EXPERT_DETAILS: YES or NO
-LEARNING_OUTCOMES_ALIGN: YES or NO
-OBJECTIVES_MATCH: YES or NO
-PARTICIPANTS_VALID: YES or NO
-REASONING: <brief explanation of your findings>"""
+Return EVERY line exactly as shown:
+TITLE_MATCH: YES/NO
+EXPERT_DETAILS: YES/NO
+LEARNING_OUTCOMES_ALIGN: YES/NO
+OBJECTIVES_MATCH: YES/NO
+PARTICIPANTS_VALID: YES/NO
+REASONING: <brief one-line evidence found in the text>"""
         
         response = self._call_ollama(prompt, use_cache=True)
         if not response:
