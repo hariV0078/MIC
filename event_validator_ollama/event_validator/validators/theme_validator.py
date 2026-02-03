@@ -80,7 +80,7 @@ def validate_theme_alignment(
     # Use Gemini for semantic alignment check (optimized: Gemini has higher capacity than Groq)
     logger.debug("  Calling API for theme alignment check (using Gemini for better throughput)...")
     logger.debug(f"  Using event title for theme check: {event_title_for_check[:100] if event_title_for_check else 'N/A'}")
-        aligned = ollama_client.check_theme_alignment(
+    aligned = ollama_client.check_theme_alignment(
         title=event_title_for_check,
         objectives=objectives,
         learning_outcomes=learning_outcomes,
