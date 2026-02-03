@@ -11,6 +11,10 @@ import random
 import time
 from typing import Optional
 from contextlib import contextmanager
+from dotenv import load_dotenv
+
+# Load environment variables early for semaphore initialization
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 

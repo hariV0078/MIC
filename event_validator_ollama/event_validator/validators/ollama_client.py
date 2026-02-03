@@ -45,8 +45,8 @@ class OllamaClient:
         self.base_url = base_url or os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
         
         # Use efficient models - adjust based on available GPU/RAM
-        # llama3.2:3b is fast and efficient, llama3.1:8b is more capable
-        self.text_model = text_model or os.getenv("OLLAMA_TEXT_MODEL", "llama3.2:3b")
+        # llama3.2:1b is significantly faster on CPU than 3b
+        self.text_model = text_model or os.getenv("OLLAMA_TEXT_MODEL", "llama3.2:1b")
         # llava:latest supports vision tasks
         self.vision_model = vision_model or os.getenv("OLLAMA_VISION_MODEL", "llava:latest")
         
@@ -303,7 +303,7 @@ Respond with ONLY one word: "YES" if relevant, "NO" if not relevant."""
         prompt = f"""You are a validation system. Analyze the following PDF text and check consistency.
 
 PDF Text:
-{pdf_text[:3000]}
+{pdf_text[:2500]}
 
 Expected Title: {expected_title or 'Not provided'}
 Expected Objectives: {expected_objectives or 'Not provided'}
@@ -392,7 +392,7 @@ PARTICIPANTS_VALID: YES or NO"""
         prompt = f"""You are a validation system. Analyze the following PDF text and check all validation criteria.
 
 PDF Text:
-{pdf_text[:4000]}
+{pdf_text[:2500]}
 
 Expected Title: {expected_title or 'Not provided'}
 Expected Objectives: {expected_objectives or 'Not provided'}
