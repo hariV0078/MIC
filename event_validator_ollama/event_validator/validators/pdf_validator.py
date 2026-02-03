@@ -32,7 +32,7 @@ def validate_pdf_title_match(
     pdf_text = submission.pdf_data.text[:500]  # First 500 chars for title search
     
     # Use Groq for fuzzy title matching
-        consistency = ollama_client.check_pdf_consistency(
+    consistency = ollama_client.check_pdf_consistency(
         pdf_text=submission.pdf_data.text,
         expected_title=expected_title,
         expected_objectives=None,
@@ -125,7 +125,7 @@ def validate_learning_outcomes_align(
         )
     
     # Use Groq for semantic alignment
-        consistency = ollama_client.check_pdf_consistency(
+    consistency = ollama_client.check_pdf_consistency(
         pdf_text=submission.pdf_data.text,
         expected_title=None,
         expected_objectives=None,
@@ -168,7 +168,7 @@ def validate_objectives_match(
         )
     
     # Use Groq for semantic alignment
-        consistency = ollama_client.check_pdf_consistency(
+    consistency = ollama_client.check_pdf_consistency(
         pdf_text=submission.pdf_data.text,
         expected_title=None,
         expected_objectives=expected_objectives,
@@ -216,7 +216,7 @@ def validate_participant_info_match(
         )
     
     # Use Groq for participant validation
-        consistency = ollama_client.check_pdf_consistency(
+    consistency = ollama_client.check_pdf_consistency(
         pdf_text=submission.pdf_data.text,
         expected_title=None,
         expected_objectives=None,
