@@ -400,14 +400,22 @@ def validate_pdf(submission: EventSubmission, ollama_client: OllamaClient) -> Li
     ))
     
     # Rule 2: Learning outcomes align (3 points)
-    # SPECIAL CASE: If title doesn't match, learning outcomes should also fail
+    # Use RULE-BASED validation: Check if PDF contains learning-related content
     rule_name, points = PDF_RULES[2]
-    learning_passed = validation_results.get("learning_outcomes_align", False) and title_match
+    
+    # Simple heuristic: Check for learning-related keywords in PDF
+    learning_keywords = ['learning', 'outcome', 'benefit', 'knowledge', 'skill', 'understand', 'ability', 'competency']
+    pdf_lower = pdf_text.lower()
+    learning_keyword_matches = [kw for kw in learning_keywords if kw in pdf_lower]
+    
+    # PASS if title matches AND we find 2+ learning keywords in PDF
+    learning_passed = title_match and len(learning_keyword_matches) >= 2
+    
     results.append(ValidationResult(
         criterion=rule_name,
         passed=learning_passed,
         points_awarded=points if learning_passed else 0,
-        message="" if learning_passed else (f"Learning outcomes in PDF do not align with expected outcomes. Reason: {reasoning}" if title_match else "PDF title mismatch - learning outcomes validation failed")
+        message="" if learning_passed else (f"Learning outcomes not found. Keywords missing: {', '.join(learning_keywords[:4])}" if title_match else "PDF title mismatch - learning outcomes validation failed")
     ))
     
     # Rule 3: Objectives match (3 points)

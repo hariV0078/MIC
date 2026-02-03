@@ -34,37 +34,36 @@ def extract_keywords(text: str, min_length: int = 3) -> Set[str]:
 
 def check_theme_alignment_rules(title: str, objectives: str, learning_outcomes: str, theme: str) -> Tuple[bool, str]:
     """
-    Check theme alignment using DETERMINISTIC word-level keyword overlap.
+    Check theme alignment using FUZZY keyword substring matching.
     
     Rules:
     1. Extract meaningful words from theme (filter stop words)
-    2. Extract meaningful words from event data (title + objectives + outcomes)
-    3. Find word-level matches (not phrase matching)
-    4. Pass if 2+ theme keywords found in event data
+    2. Check if each theme keyword appears ANYWHERE in the event text (substring search)
+    3. Pass if 2+ theme keywords found in event data
     
     Returns:
         Tuple[passed: bool, reasoning: str]
     """
-    # Extract keywords (min length 3, filter stop words)
+    # Extract theme keywords (filter stop words)
     theme_keywords = extract_keywords(theme, min_length=3)
     
-    # Combine all event data
+    # Combine all event data and normalize for substring search
     event_text = f"{title} {objectives} {learning_outcomes}"
-    event_keywords = extract_keywords(event_text, min_length=3)
+    clean_event_text = normalize_text(event_text)  # Lowercase, remove special chars
     
-    # Find word-level overlap
-    overlap = theme_keywords & event_keywords
+    # FUZZY MATCHING: Check if each keyword appears ANYWHERE in the text
+    matches = [kw for kw in theme_keywords if kw in clean_event_text]
     
     if not theme_keywords:
         return True, "Theme has no meaningful keywords - auto-pass"
     
     # DETERMINISTIC PASS RULE: 2+ keyword matches
-    if len(overlap) >= 2:
-        reasoning = f"Found {len(overlap)} matching keywords: {', '.join(sorted(list(overlap)[:5]))}"
+    if len(matches) >= 2:
+        reasoning = f"Found {len(matches)} matching keywords: {', '.join(sorted(matches)[:5])}"
         logger.info(f"Theme alignment PASS: {reasoning}")
         return True, reasoning
     else:
-        reasoning = f"Only {len(overlap)} matching keyword(s) found (need 2+): {', '.join(overlap) if overlap else 'none'}"
+        reasoning = f"Only {len(matches)} matching keyword(s) found (need 2+): {', '.join(matches) if matches else 'none'}"
         logger.warning(f"Theme alignment FAIL: {reasoning}")
         return False, reasoning
 
