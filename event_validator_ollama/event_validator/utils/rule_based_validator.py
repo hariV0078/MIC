@@ -78,8 +78,8 @@ def check_theme_alignment_rules(title: str, objectives: str, learning_outcomes: 
     theme_keywords = extract_keywords(theme, min_length=3)
     expanded_theme_keywords = expand_with_concepts(theme_keywords)
     
-    # Combine all event data and normalize for substring search
-    event_text = f"{title} {objectives} {learning_outcomes}"
+    # Combine title and learning outcomes for theme checking (exclude objectives)
+    event_text = f"{title} {learning_outcomes}"
     clean_event_text = normalize_text(event_text)
     event_keywords = extract_keywords(event_text, min_length=2)  # Allow 2-char like "AI"
     

@@ -320,6 +320,42 @@ def validate_pdf(submission: EventSubmission, ollama_client: OllamaClient) -> Li
         'resource person', 'keynote', 'presenter', 'panelist'
     ])
     
+    # Get event_driven for special handling BEFORE AI call
+    original_data = getattr(submission, '_original_row_data', row_data)
+    event_driven = original_data.get('event_driven')
+    try:
+        event_driven = int(event_driven) if event_driven is not None else None
+    except (ValueError, TypeError):
+        event_driven = None
+    
+    # SPECIAL CASE: For event_driven=3, if title doesn't match, fail ALL PDF validations
+    # Check this BEFORE the expensive AI call
+    if event_driven == 3:
+        logger.info(f"Event driven 3 detected - checking title match for PDF validation")
+        # Quick title check first
+        pdf_title = submission.pdf_data.title or ""
+        pdf_text_sample = submission.pdf_data.text[:500]
+        
+        # Use a simple heuristic check first before AI
+        expected_title_lower = expected_title.lower()
+        title_words = set(expected_title_lower.split())
+        pdf_sample_lower = pdf_text_sample.lower()
+        matching_words = sum(1 for word in title_words if word in pdf_sample_lower)
+        quick_title_match = len(title_words) > 0 and matching_words >= max(1, len(title_words) // 2)
+        
+        if not quick_title_match:
+            logger.warning(f"Event driven 3: Quick title check failed - failing all PDF validations")
+            # Return all failures immediately
+            results = []
+            for rule_name, points in PDF_RULES:
+                results.append(ValidationResult(
+                    criterion=rule_name,
+                    passed=False,
+                    points_awarded=0,
+                    message="PDF title mismatch - all PDF validations failed for event_driven=3"
+                ))
+            return results
+    
     # Single unified API call for all PDF validations
     logger.info("Running unified PDF validation (single API call for all 5 checks)")
     validation_results = ollama_client.validate_pdf_comprehensive(
@@ -330,14 +366,6 @@ def validate_pdf(submission: EventSubmission, ollama_client: OllamaClient) -> Li
         expected_participants=expected_participants,
         pdf_hash=pdf_hash
     )
-    
-    # Get event_driven for special handling
-    original_data = getattr(submission, '_original_row_data', row_data)
-    event_driven = original_data.get('event_driven')
-    try:
-        event_driven = int(event_driven) if event_driven is not None else None
-    except (ValueError, TypeError):
-        event_driven = None
     
     # Map unified results to individual validation results
     # Rule 0: PDF title matches metadata (7 points)
@@ -351,9 +379,9 @@ def validate_pdf(submission: EventSubmission, ollama_client: OllamaClient) -> Li
         message="" if title_match else f"PDF title does not match expected: {expected_title}. Reason: {reasoning}"
     ))
     
-    # SPECIAL CASE: For event_driven=3, if title doesn't match, fail ALL PDF validations
+    # SPECIAL CASE: For event_driven=3, if title doesn't match, fail ALL remaining PDF validations
     if event_driven == 3 and not title_match:
-        logger.warning(f"Event driven 3: Title mismatch detected - failing all PDF validations")
+        logger.warning(f"Event driven 3: AI title check confirmed mismatch - failing all remaining PDF validations")
         # Rule 1: Expert details present (7 points) - FAIL
         rule_name, points = PDF_RULES[1]
         results.append(ValidationResult(
