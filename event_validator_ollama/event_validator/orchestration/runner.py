@@ -190,7 +190,7 @@ def process_submission(
             if temp_pdf_path:
                 logger.info(f"Extracting PDF from downloaded file: {temp_pdf_path}")
                 submission.pdf_data = extract_pdf_text(temp_pdf_path)
-                if submission.pdf_data:  # PDF successfully extracted
+                if submission.pdf_data and submission.pdf_data.text.strip():  # PDF successfully extracted
                     pdf_missing = False
                 # Note: PDF file is saved in current directory (downloaded_files/)
                 # It is kept for potential future use and can be cleaned up manually if needed
@@ -201,7 +201,7 @@ def process_submission(
             if pdf_path.exists():
                 logger.info(f"Extracting PDF: {pdf_path}")
                 submission.pdf_data = extract_pdf_text(pdf_path)
-                if submission.pdf_data:  # PDF successfully extracted
+                if submission.pdf_data and submission.pdf_data.text.strip():  # PDF successfully extracted
                     pdf_missing = False
             else:
                 logger.warning(f"PDF file not found: {pdf_path}")
@@ -332,11 +332,38 @@ def process_submission(
     
     # Removed delay - parallel processing handles rate limiting better
     
+    # Check if event_driven=3 and theme alignment failed - skip PDF validation
+    theme_alignment_failed = False
+    if theme_results:
+        # First theme result is the theme alignment check
+        first_theme_result = theme_results[0]
+        if not first_theme_result.passed:
+            theme_alignment_failed = True
+    
     # PDF validation
     logger.info("─" * 80)
     logger.info("PDF VALIDATION (25 points total)")
     logger.info("─" * 80)
-    if submission.pdf_data:
+    
+    # EVENT_DRIVEN=3 SPECIAL RULE: If theme alignment fails, skip ALL PDF validation
+    if event_driven == 3 and theme_alignment_failed:
+        logger.warning("EVENT_DRIVEN=3: Theme alignment failed - skipping ALL PDF validations (awarding 0 points)")
+        from event_validator.config.rules import PDF_RULES
+        pdf_results = []
+        for rule_name, points in PDF_RULES:
+            pdf_results.append(ValidationResult(
+                criterion=rule_name,
+                passed=False,
+                points_awarded=0,
+                message="Event driven 3: Theme alignment failed - PDF validation skipped"
+            ))
+        all_results.extend(pdf_results)
+        pdf_points = 0
+        pdf_total = len(PDF_RULES)
+        logger.info(f"PDF Validation Summary: 0/{pdf_total} passed | Points: 0/25 (skipped due to theme mismatch)")
+        for result in pdf_results:
+            logger.info(f"  [✗ SKIP] {result.criterion}: 0 points | {result.message}")
+    elif submission.pdf_data:
         # Check budget before PDF validation (1 API call)
         if not budget.can_make_call("pdf_validation"):
             logger.warning(f"Budget exhausted before PDF validation. Skipping API call.")
@@ -383,6 +410,7 @@ def process_submission(
         pdf_total = len(PDF_RULES)
         logger.info(f"PDF Validation Summary: 0/{pdf_total} passed | Points: {pdf_points}/25 (PDF missing or unreadable)")
         logger.info(f"  [✗ FAIL] PDF Validation: 0 points | PDF file missing or could not be downloaded")
+
     
     # Image validation
     logger.info("─" * 80)
@@ -494,88 +522,59 @@ def process_submission(
     # "Title: ...; Participants: ...; Theme: ...; PDF: ...; Image Analysis: ..."
     failed_results = [r for r in all_results if not r.passed]
     if failed_results:
-        # Map criteria to category names
-        def get_category_name(criterion: str) -> str:
-            """Map validation criterion to category name."""
-            criterion_lower = criterion.lower()
-            if "title" in criterion_lower or "objectives" in criterion_lower or "learning" in criterion_lower:
-                if "theme" in criterion_lower or "align" in criterion_lower:
-                    return "Theme"
-                elif "pdf" in criterion_lower:
-                    return "PDF"
-                else:
-                    return "Title"
-            elif "participant" in criterion_lower:
-                if "pdf" in criterion_lower or "visible" in criterion_lower:
-                    return "Image Analysis"
-                else:
-                    return "Participants"
-            elif "pdf" in criterion_lower or "expert" in criterion_lower:
-                return "PDF"
-            elif "geotag" in criterion_lower or "banner" in criterion_lower or "poster" in criterion_lower or "event scene" in criterion_lower or "event mode" in criterion_lower or "visible" in criterion_lower:
-                return "Image Analysis"
-            elif "duplicate" in criterion_lower:
-                return "Image Analysis"
-            elif "level" in criterion_lower or "duration" in criterion_lower:
-                return "Title"
-            else:
-                return "Other"
+        # Standardized mapping of criterion to category (MUST match score column mapping)
+        CRITERION_CATEGORY_MAP = {
+            # Theme rules
+            "Title/Objectives/Learning align to theme": "Theme",
+            "Level matches duration": "Title",
+            "Participants reported > 15": "Participants",
+            "Year alignment (financial vs academic)": "Theme",
+            # PDF rules
+            "PDF title matches metadata": "PDF",
+            "Expert details present": "PDF",
+            "Learning outcomes align": "PDF",
+            "Objectives match": "PDF",
+            "Participant info matches": "PDF",
+            # Image rules
+            "GeoTag present": "Image Analysis",
+            "Banner/Poster visible": "Image Analysis",
+            "Event scene is real activity": "Image Analysis",
+            "Event mode matches (online/offline)": "Image Analysis",
+            "15+ participants visible": "Image Analysis",
+            # Similarity rules
+            "Duplicate photo detection (filesystem)": "Image Analysis",
+        }
         
-        # Format failure messages (remove rule name prefix, keep only the reason)
+        # Standardized failure messages (fixed, deterministic)
+        CRITERION_FAILURE_MSG = {
+            "Title/Objectives/Learning align to theme": "Title/Objectives/Learning do not align with declared theme",
+            "Level matches duration": "Event level does not match duration requirements",
+            "Participants reported > 15": "Less than 15 participants reported",
+            "Year alignment (financial vs academic)": "Year alignment validation failed",
+            "PDF title matches metadata": "PDF title does not match expected title",
+            "Expert details present": "Expert/Speaker details not found in PDF",
+            "Learning outcomes align": "Learning outcomes not clearly stated in PDF",
+            "Objectives match": "Objectives not found or don't match in PDF",
+            "Participant info matches": "Participant information not found in PDF",
+            "GeoTag present": "No GPS/GeoTag data in images",
+            "Banner/Poster visible": "No banner or poster visible in images",
+            "Event scene is real activity": "Images do not show real event activity",
+            "Event mode matches (online/offline)": "Event mode mismatch in images",
+            "15+ participants visible": "Less than 15 participants visible in images",
+            "Duplicate photo detection (filesystem)": "Duplicate or similar images detected",
+        }
+        
+        def get_category_name(criterion: str) -> str:
+            """Map validation criterion to category name - DETERMINISTIC."""
+            return CRITERION_CATEGORY_MAP.get(criterion, "Other")
+        
         def format_failure_message(result: ValidationResult) -> str:
-            """Format failure message without rule name prefix."""
-            message = result.message.strip() if result.message else ""
-            criterion = result.criterion
-            
-            # Remove rule name prefix if present (e.g., "PDF title matches metadata: Title not found" -> "Title not found")
-            if message:
-                # Check if message starts with criterion name
-                if message.lower().startswith(criterion.lower()):
-                    # Remove the prefix
-                    remaining = message[len(criterion):].strip()
-                    if remaining.startswith(":"):
-                        remaining = remaining[1:].strip()
-                    if remaining:
-                        return remaining
-                return message
-            
-            # If no message, create a default one based on criterion
-            if "title" in criterion.lower():
-                if "pdf" in criterion.lower():
-                    return "Title not found in PDF"
-                else:
-                    return "Title validation failed"
-            elif "participant" in criterion.lower():
-                if "pdf" in criterion.lower():
-                    return "Participant information missing in PDF"
-                elif "visible" in criterion.lower():
-                    return "Insufficient participants visible in images"
-                else:
-                    return "Participant count validation failed"
-            elif "theme" in criterion.lower() or "align" in criterion.lower():
-                return "Theme validation failed"
-            elif "expert" in criterion.lower():
-                return "Expert details missing in PDF"
-            elif "learning" in criterion.lower():
-                return "Learning outcomes not specified in PDF"
-            elif "objectives" in criterion.lower():
-                return "Objectives not clearly stated in PDF"
-            elif "geotag" in criterion.lower():
-                return "No GPS location data in images"
-            elif "banner" in criterion.lower() or "poster" in criterion.lower():
-                return "Banner or poster not visible"
-            elif "real activity" in criterion.lower():
-                return "Event scene does not show real activity"
-            elif "mode" in criterion.lower():
-                return "Event mode mismatch in images"
-            elif "duplicate" in criterion.lower():
-                return "Duplicate images detected"
-            elif "level" in criterion.lower() or "duration" in criterion.lower():
-                return "Level or duration validation failed"
-            else:
-                return criterion
+            """Format failure message - DETERMINISTIC based on criterion only."""
+            # Use standardized message from map, ignore variable validator messages
+            return CRITERION_FAILURE_MSG.get(result.criterion, result.criterion)
         
         # Group failures by category
+
         category_failures = {}
         for result in failed_results:
             category = get_category_name(result.criterion)
@@ -663,8 +662,8 @@ def process_csv(
         logger.info("downloaded_files directory is already empty")
     
     # Reset circuit breakers to ensure fresh state for each run
-    from event_validator.utils.circuit_breaker import reset_ollama_circuit_breaker
-    reset_ollama_circuit_breaker()
+    from event_validator.utils.circuit_breaker import reset_gemini_circuit_breaker
+    reset_gemini_circuit_breaker()
     logger.info("Circuit breakers reset for new processing run")
     
     # Initialize Ollama client
@@ -699,9 +698,12 @@ def process_csv(
     # Reset batch hash tracker at start of new batch
     reset_batch_hash_tracker()
     
-    max_workers = min(int(os.getenv('DEFAULT_MAX_WORKERS', '2')), len(rows))
-    from event_validator.utils.concurrency import OLLAMA_MAX_CONCURRENT
-    logger.info(f"Processing {len(rows)} submissions with {max_workers} parallel workers (Ollama concurrency: {OLLAMA_MAX_CONCURRENT})")
+    # Process rows in parallel for better performance
+    # Optimized for 8-minute target: 12 workers × 6 concurrent Gemini calls = 72 concurrent API calls
+    # With 148 RPM (145 effective after 98% safety), this provides maximum safe throughput
+    max_workers = min(int(os.getenv('DEFAULT_MAX_WORKERS', '12')), len(rows))
+    from event_validator.utils.concurrency import GEMINI_MAX_CONCURRENT
+    logger.info(f"Processing {len(rows)} submissions with {max_workers} parallel workers (Ollama concurrency: {GEMINI_MAX_CONCURRENT})")
     
     enriched_rows = [None] * len(rows)  # Pre-allocate list to maintain order
     

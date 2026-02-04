@@ -77,14 +77,15 @@ def validate_theme_alignment(
     # activity_name is the primary field containing the event title
     event_title_for_check = activity_name or user_title or expected_title
     
-    # Use Ollama for semantic alignment check
-    logger.debug("  Calling API for theme alignment check...")
+    # Use Gemini for semantic alignment check (optimized: Gemini has higher capacity than Groq)
+    logger.debug("  Calling API for theme alignment check (using Gemini for better throughput)...")
     logger.debug(f"  Using event title for theme check: {event_title_for_check[:100] if event_title_for_check else 'N/A'}")
-    aligned, reasoning = ollama_client.check_theme_alignment(
+        aligned = ollama_client.check_theme_alignment(
         title=event_title_for_check,
         objectives=objectives,
         learning_outcomes=learning_outcomes,
-        theme=theme
+        theme=theme,
+        prefer_groq=False  # Use Gemini (150 RPM) instead of Groq (25 RPM) for better throughput
     )
     
     if aligned:
@@ -99,7 +100,7 @@ def validate_theme_alignment(
         # Format audit-ready failure message
         # Use activity_name as the observed title since it's the primary event title field
         observed_title = activity_name or user_title
-        failure_reason = f"Content does not semantically align with declared theme. Evidence found: {reasoning}" if reasoning else "Content does not semantically align with declared theme"
+        failure_reason = "Content does not semantically align with declared theme"
         message = format_title_validation_message(
             event_driven=event_driven,
             expected_title=expected_title,

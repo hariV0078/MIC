@@ -31,8 +31,8 @@ def validate_pdf_title_match(
     pdf_title = submission.pdf_data.title or ""
     pdf_text = submission.pdf_data.text[:500]  # First 500 chars for title search
     
-    # Use Ollama for fuzzy title matching
-    consistency = ollama_client.check_pdf_consistency(
+    # Use Groq for fuzzy title matching
+        consistency = ollama_client.check_pdf_consistency(
         pdf_text=submission.pdf_data.text,
         expected_title=expected_title,
         expected_objectives=None,
@@ -125,7 +125,7 @@ def validate_learning_outcomes_align(
         )
     
     # Use Groq for semantic alignment
-    consistency = ollama_client.check_pdf_consistency(
+        consistency = ollama_client.check_pdf_consistency(
         pdf_text=submission.pdf_data.text,
         expected_title=None,
         expected_objectives=None,
@@ -168,7 +168,7 @@ def validate_objectives_match(
         )
     
     # Use Groq for semantic alignment
-    consistency = ollama_client.check_pdf_consistency(
+        consistency = ollama_client.check_pdf_consistency(
         pdf_text=submission.pdf_data.text,
         expected_title=None,
         expected_objectives=expected_objectives,
@@ -216,7 +216,7 @@ def validate_participant_info_match(
         )
     
     # Use Groq for participant validation
-    consistency = ollama_client.check_pdf_consistency(
+        consistency = ollama_client.check_pdf_consistency(
         pdf_text=submission.pdf_data.text,
         expected_title=None,
         expected_objectives=None,
@@ -320,42 +320,6 @@ def validate_pdf(submission: EventSubmission, ollama_client: OllamaClient) -> Li
         'resource person', 'keynote', 'presenter', 'panelist'
     ])
     
-    # Get event_driven for special handling BEFORE AI call
-    original_data = getattr(submission, '_original_row_data', row_data)
-    event_driven = original_data.get('event_driven')
-    try:
-        event_driven = int(event_driven) if event_driven is not None else None
-    except (ValueError, TypeError):
-        event_driven = None
-    
-    # SPECIAL CASE: For event_driven=3, if title doesn't match, fail ALL PDF validations
-    # Check this BEFORE the expensive AI call
-    if event_driven == 3:
-        logger.info(f"Event driven 3 detected - checking title match for PDF validation")
-        # Quick title check first
-        pdf_title = submission.pdf_data.title or ""
-        pdf_text_sample = submission.pdf_data.text[:500]
-        
-        # Use a simple heuristic check first before AI
-        expected_title_lower = expected_title.lower()
-        title_words = set(expected_title_lower.split())
-        pdf_sample_lower = pdf_text_sample.lower()
-        matching_words = sum(1 for word in title_words if word in pdf_sample_lower)
-        quick_title_match = len(title_words) > 0 and matching_words >= max(1, len(title_words) // 2)
-        
-        if not quick_title_match:
-            logger.warning(f"Event driven 3: Quick title check failed - failing all PDF validations")
-            # Return all failures immediately
-            results = []
-            for rule_name, points in PDF_RULES:
-                results.append(ValidationResult(
-                    criterion=rule_name,
-                    passed=False,
-                    points_awarded=0,
-                    message="PDF title mismatch - all PDF validations failed for event_driven=3"
-                ))
-            return results
-    
     # Single unified API call for all PDF validations
     logger.info("Running unified PDF validation (single API call for all 5 checks)")
     validation_results = ollama_client.validate_pdf_comprehensive(
@@ -367,21 +331,28 @@ def validate_pdf(submission: EventSubmission, ollama_client: OllamaClient) -> Li
         pdf_hash=pdf_hash
     )
     
+    # Get event_driven for special handling
+    original_data = getattr(submission, '_original_row_data', row_data)
+    event_driven = original_data.get('event_driven')
+    try:
+        event_driven = int(event_driven) if event_driven is not None else None
+    except (ValueError, TypeError):
+        event_driven = None
+    
     # Map unified results to individual validation results
     # Rule 0: PDF title matches metadata (7 points)
     rule_name, points = PDF_RULES[0]
     title_match = validation_results.get("title_match", False)
-    reasoning = validation_results.get("reasoning", "")
     results.append(ValidationResult(
         criterion=rule_name,
         passed=title_match,
         points_awarded=points if title_match else 0,
-        message="" if title_match else f"PDF title does not match expected: {expected_title}. Reason: {reasoning}"
+        message="" if title_match else f"PDF title does not match expected: {expected_title}"
     ))
     
-    # SPECIAL CASE: For event_driven=3, if title doesn't match, fail ALL remaining PDF validations
+    # SPECIAL CASE: For event_driven=3, if title doesn't match, fail ALL PDF validations
     if event_driven == 3 and not title_match:
-        logger.warning(f"Event driven 3: AI title check confirmed mismatch - failing all remaining PDF validations")
+        logger.warning(f"Event driven 3: Title mismatch detected - failing all PDF validations")
         # Rule 1: Expert details present (7 points) - FAIL
         rule_name, points = PDF_RULES[1]
         results.append(ValidationResult(
@@ -424,88 +395,37 @@ def validate_pdf(submission: EventSubmission, ollama_client: OllamaClient) -> Li
         criterion=rule_name,
         passed=expert_passed,
         points_awarded=points if expert_passed else 0,
-        message="" if expert_passed else f"Expert details not found in PDF. Evidence: {reasoning}"
+        message="" if expert_passed else "Expert details not found in PDF"
     ))
     
     # Rule 2: Learning outcomes align (3 points)
-    # Use RULE-BASED validation: Check if PDF contains learning-related content
+    # SPECIAL CASE: If title doesn't match, learning outcomes should also fail
     rule_name, points = PDF_RULES[2]
-    
-    # Simple heuristic: Check for learning-related keywords in PDF
-    learning_keywords = ['learning', 'outcome', 'benefit', 'knowledge', 'skill', 'understand', 'ability', 'competency']
-    pdf_lower = pdf_text.lower()
-    learning_keyword_matches = [kw for kw in learning_keywords if kw in pdf_lower]
-    
-    # PASS if title matches AND we find 2+ learning keywords in PDF
-    learning_passed = title_match and len(learning_keyword_matches) >= 2
-    
+    learning_passed = validation_results.get("learning_outcomes_align", False) and title_match
     results.append(ValidationResult(
         criterion=rule_name,
         passed=learning_passed,
         points_awarded=points if learning_passed else 0,
-        message="" if learning_passed else (f"Learning outcomes not found. Keywords missing: {', '.join(learning_keywords[:4])}" if title_match else "PDF title mismatch - learning outcomes validation failed")
+        message="" if learning_passed else ("Learning outcomes in PDF do not align with expected outcomes" if title_match else "PDF title mismatch - learning outcomes validation failed")
     ))
     
     # Rule 3: Objectives match (3 points)
-    # Use RULE-BASED validation instead of AI
     rule_name, points = PDF_RULES[3]
-    
-    from event_validator.utils.rule_based_validator import check_objectives_alignment_rules
-    
-    # Extract objectives from PDF (first 2000 chars likely contain them)
-    pdf_objectives_section = pdf_text[:2000]
-    objectives_aligned, obj_reasoning = check_objectives_alignment_rules(
-        pdf_objectives=pdf_objectives_section,
-        expected_objectives=expected_objectives
-    )
-    
     results.append(ValidationResult(
         criterion=rule_name,
-        passed=objectives_aligned,
-        points_awarded=points if objectives_aligned else 0,
-        message="" if objectives_aligned else f"Objectives mismatch. {obj_reasoning}"
+        passed=validation_results.get("objectives_match", False),
+        points_awarded=points if validation_results.get("objectives_match", False) else 0,
+        message="" if validation_results.get("objectives_match", False) else "Objectives in PDF do not match expected objectives"
     ))
     
     # Rule 4: Participant info matches (5 points)
-    # HYBRID APPROACH: Try regex first, then use AI result as fallback
     rule_name, points = PDF_RULES[4]
-    
-    # Import regex extractor
-    from event_validator.utils.participant_extractor import extract_participant_count_regex
-    
-    # Try regex extraction first (more reliable for numbers)
-    regex_count, regex_evidence = extract_participant_count_regex(pdf_text)
-    
-    if regex_count >= 15:
-        # Regex found sufficient participants - trust it
-        logger.info(f"Regex participant check PASSED: {regex_count} >= 15")
-        results.append(ValidationResult(
-            criterion=rule_name,
-            passed=True,
-            points_awarded=points,
-            message=""
-        ))
-    else:
-        # Regex didn't find enough - check AI result as fallback
-        ai_passed = validation_results.get("participants_valid", False)
-        if ai_passed:
-            logger.info("AI participant check PASSED (regex found insufficient)")
-            results.append(ValidationResult(
-                criterion=rule_name,
-                passed=True,
-                points_awarded=points,
-                message=""
-            ))
-        else:
-            # Both regex and AI failed
-            combined_evidence = f"Regex: {regex_evidence}; AI: {reasoning}" if regex_evidence else reasoning
-            logger.warning(f"Participant check FAILED. Regex count: {regex_count}, AI: {ai_passed}")
-            results.append(ValidationResult(
-                criterion=rule_name,
-                passed=False,
-                points_awarded=0,
-                message=f"PDF participant information does not match expected (needs 15+ participants). Found: {combined_evidence}"
-            ))
+    results.append(ValidationResult(
+        criterion=rule_name,
+        passed=validation_results.get("participants_valid", False),
+        points_awarded=points if validation_results.get("participants_valid", False) else 0,
+        message="" if validation_results.get("participants_valid", False) else f"PDF participant information does not match expected (needs 15+ participants)"
+    ))
     
     logger.debug(f"PDF validation complete. Reasoning: {validation_results.get('reasoning', 'N/A')}")
     

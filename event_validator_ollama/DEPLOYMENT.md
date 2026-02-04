@@ -143,22 +143,14 @@ sudo systemctl status event-validator
 
 ## Performance Optimization
 
-### Increase Ollama Workers (CPU-Only Optimization)
+### Increase Ollama Workers
 
-For a 16-core CPU, limit parallelism to ensure each model gets enough compute power.
-
-Edit `/etc/systemd/system/ollama.service.d/override.conf`:
+Edit `/etc/systemd/system/ollama.service`:
 
 ```ini
 [Service]
-# Limit to 2 parallel requests to give each request 8 threads
-Environment="OLLAMA_NUM_PARALLEL=2"
-# Keep both models in memory
+Environment="OLLAMA_NUM_PARALLEL=4"
 Environment="OLLAMA_MAX_LOADED_MODELS=2"
-# Maximize CPU utilization per request (16 cores / 2 models = 8)
-Environment="OLLAMA_NUM_THREAD=8"
-# Keep models hot
-Environment="OLLAMA_KEEP_ALIVE=24h"
 ```
 
 Restart:

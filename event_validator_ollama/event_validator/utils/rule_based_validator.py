@@ -6,25 +6,263 @@ from typing import Tuple, Set
 logger = logging.getLogger(__name__)
 
 # Semantic concept mapping - related terms that should be treated as matching
+# Covers 4 themes: Entrepreneurship & Startup, Innovation & Design Thinking, 
+# IPR & Technology Transfer, Pre-Incubation & Incubation Management
 THEME_CONCEPT_MAP = {
-    # Innovation & Design Thinking related
-    'innovation': {'ai', 'artificial', 'intelligence', 'technology', 'technological', 'revolution', 'emerging', 'learning', 'machine', 'automation', 'digital', 'smart', 'creative', 'problem', 'solving'},
-    'design': {'thinking', 'creative', 'solution', 'prototype', 'ideation', 'brainstorm', 'user', 'experience'},
-    'thinking': {'reasoning', 'perception', 'cognitive', 'learning', 'problem', 'solving', 'analytical'},
+    # ==========================================================================
+    # THEME 1: Entrepreneurship & Startup
+    # ==========================================================================
+    'entrepreneurship': {
+        'startup', 'business', 'venture', 'innovation', 'idea', 'founder', 'incubation',
+        'enterprise', 'company', 'organization', 'industry', 'commerce', 'trade',
+        'market', 'customer', 'revenue', 'profit', 'growth', 'scaling', 'pitch',
+        'investor', 'funding', 'investment', 'capital', 'finance', 'seed', 'angel',
+        'accelerator', 'mentor', 'mentoring', 'ecosystem', 'hub', 'center', 'centre',
+        'development', 'skill', 'training', 'workshop', 'session', 'program', 'programme'
+    },
+    'startup': {
+        'entrepreneurship', 'business', 'venture', 'innovation', 'incubation', 'funding',
+        'founder', 'cofounder', 'ceo', 'cto', 'product', 'service', 'solution',
+        'market', 'customer', 'user', 'growth', 'scaling', 'pitch', 'investor',
+        'accelerator', 'ecosystem', 'hub', 'technology', 'tech', 'digital'
+    },
+    'business': {
+        'entrepreneurship', 'startup', 'venture', 'enterprise', 'company', 'industry',
+        'commerce', 'trade', 'market', 'customer', 'revenue', 'profit', 'growth',
+        'management', 'strategy', 'planning', 'development', 'innovation'
+    },
+    'venture': {
+        'entrepreneurship', 'startup', 'business', 'funding', 'investment', 'capital',
+        'investor', 'finance', 'growth', 'scaling', 'innovation'
+    },
+    'founder': {
+        'entrepreneurship', 'startup', 'cofounder', 'ceo', 'leader', 'visionary',
+        'innovator', 'creator', 'builder', 'mentor'
+    },
     
-    # Technology/AI related
-    'technology': {'ai', 'artificial', 'intelligence', 'innovation', 'digital', 'automation', 'computer', 'software', 'hardware'},
-    'artificial': {'intelligence', 'ai', 'machine', 'learning', 'automation', 'computer'},
-    'intelligence': {'ai', 'artificial', 'machine', 'learning', 'reasoning', 'perception', 'cognitive'},
+    # ==========================================================================
+    # THEME 2: Innovation & Design Thinking
+    # ==========================================================================
+    'innovation': {
+        'ai', 'artificial', 'intelligence', 'technology', 'technological', 'revolution',
+        'emerging', 'learning', 'machine', 'automation', 'digital', 'smart', 'creative',
+        'problem', 'solving', 'solution', 'idea', 'ideation', 'prototype', 'design',
+        'thinking', 'research', 'development', 'advancement', 'progress', 'future',
+        'disruption', 'disruptive', 'breakthrough', 'invention', 'inventive', 'novelty',
+        'entrepreneurship', 'startup', 'incubation', 'industry', 'manufacturing',
+        'medtech', 'healthcare', 'biotech', 'biotechnology', 'pharma', 'pharmaceutical',
+        'industrial', 'visit', 'field', 'exposure', 'facility', 'zone', 'park', 'hub'
+    },
+    'design': {
+        'thinking', 'creative', 'solution', 'prototype', 'ideation', 'brainstorm',
+        'user', 'experience', 'ux', 'ui', 'interface', 'product', 'service',
+        'empathy', 'define', 'ideate', 'test', 'iterate', 'innovation', 'problem',
+        'solving', 'human', 'centered', 'centric'
+    },
+    'thinking': {
+        'design', 'reasoning', 'perception', 'cognitive', 'learning', 'problem',
+        'solving', 'analytical', 'critical', 'creative', 'innovation', 'ideation',
+        'brainstorm', 'solution', 'approach', 'methodology', 'framework'
+    },
+    'creative': {
+        'innovation', 'design', 'thinking', 'ideation', 'brainstorm', 'solution',
+        'problem', 'solving', 'artistic', 'imagination', 'novelty', 'original'
+    },
+    'prototype': {
+        'innovation', 'design', 'product', 'mvp', 'minimum', 'viable', 'development',
+        'testing', 'iteration', 'model', 'demo', 'demonstration', 'proof', 'concept'
+    },
     
-    # Entrepreneurship related
-    'entrepreneurship': {'startup', 'business', 'venture', 'innovation', 'idea', 'founder', 'incubation'},
-    'startup': {'entrepreneurship', 'business', 'venture', 'innovation', 'incubation', 'funding'},
+    # ==========================================================================
+    # THEME 3: IPR & Technology Transfer
+    # ==========================================================================
+    'ipr': {
+        'patent', 'intellectual', 'property', 'copyright', 'trademark', 'innovation',
+        'invention', 'rights', 'protection', 'filing', 'registration', 'license',
+        'licensing', 'royalty', 'transfer', 'technology', 'commercialization'
+    },
+    'patent': {
+        'ipr', 'intellectual', 'property', 'innovation', 'invention', 'rights',
+        'protection', 'filing', 'registration', 'claim', 'prior', 'art', 'novelty',
+        'utility', 'design', 'provisional', 'grant', 'application'
+    },
+    'intellectual': {
+        'property', 'ipr', 'patent', 'copyright', 'trademark', 'rights', 'protection',
+        'innovation', 'invention', 'creative', 'original'
+    },
+    'property': {
+        'intellectual', 'ipr', 'patent', 'copyright', 'trademark', 'rights',
+        'protection', 'ownership', 'asset'
+    },
+    'technology': {
+        'transfer', 'innovation', 'ai', 'artificial', 'intelligence', 'digital',
+        'automation', 'computer', 'software', 'hardware', 'development', 'research',
+        'advancement', 'emerging', 'disruptive', 'breakthrough', 'medtech', 'biotech',
+        'industrial', 'manufacturing', 'industry', 'facility', 'zone', 'park'
+    },
+    'transfer': {
+        'technology', 'knowledge', 'commercialization', 'licensing', 'collaboration',
+        'partnership', 'industry', 'academia', 'research', 'innovation'
+    },
+    'copyright': {
+        'ipr', 'intellectual', 'property', 'rights', 'protection', 'creative',
+        'original', 'author', 'work', 'publication'
+    },
+    'trademark': {
+        'ipr', 'intellectual', 'property', 'brand', 'logo', 'identity', 'protection',
+        'registration', 'rights'
+    },
     
-    # IPR related
-    'ipr': {'patent', 'intellectual', 'property', 'copyright', 'trademark', 'innovation'},
-    'patent': {'ipr', 'intellectual', 'property', 'innovation', 'invention'},
+    # ==========================================================================
+    # THEME 4: Pre-Incubation & Incubation Management
+    # ==========================================================================
+    'incubation': {
+        'startup', 'entrepreneurship', 'innovation', 'business', 'venture', 'industry',
+        'development', 'preincubation', 'pre', 'accelerator', 'hub', 'center', 'centre',
+        'ecosystem', 'mentor', 'mentoring', 'coaching', 'guidance', 'support',
+        'funding', 'investment', 'seed', 'grant', 'facility', 'workspace', 'coworking',
+        'management', 'program', 'programme', 'cohort', 'batch', 'selection',
+        'medtech', 'healthcare', 'biotech', 'industrial', 'manufacturing', 'zone', 'park'
+    },
+    'preincubation': {
+        'incubation', 'startup', 'entrepreneurship', 'idea', 'ideation', 'validation',
+        'concept', 'prototype', 'mvp', 'mentoring', 'coaching', 'training', 'workshop',
+        'bootcamp', 'program', 'programme'
+    },
+    'pre': {
+        'incubation', 'preincubation', 'startup', 'idea', 'ideation', 'validation',
+        'concept', 'early', 'stage'
+    },
+    'accelerator': {
+        'incubation', 'startup', 'entrepreneurship', 'growth', 'scaling', 'funding',
+        'investment', 'mentor', 'mentoring', 'program', 'programme', 'cohort', 'batch'
+    },
+    'management': {
+        'incubation', 'business', 'startup', 'operations', 'strategy', 'planning',
+        'development', 'leadership', 'administration', 'organization'
+    },
+    'mentor': {
+        'incubation', 'entrepreneurship', 'startup', 'guidance', 'coaching', 'advice',
+        'support', 'expert', 'industry', 'experience'
+    },
+    
+    # ==========================================================================
+    # Industry/Field Visits & Exposure Programs
+    # ==========================================================================
+    'visit': {
+        'field', 'industrial', 'industry', 'exposure', 'tour', 'observation', 'learning',
+        'experience', 'practical', 'hands', 'facility', 'plant', 'factory', 'company',
+        'organization', 'institution', 'center', 'centre', 'zone', 'park', 'hub',
+        'medtech', 'healthcare', 'biotech', 'pharma', 'manufacturing', 'production'
+    },
+    'field': {
+        'visit', 'industrial', 'industry', 'exposure', 'tour', 'practical', 'hands',
+        'experience', 'learning', 'observation', 'site', 'facility'
+    },
+    'industrial': {
+        'visit', 'field', 'industry', 'manufacturing', 'production', 'factory', 'plant',
+        'facility', 'zone', 'park', 'exposure', 'tour', 'experience', 'innovation',
+        'technology', 'automation', 'engineering'
+    },
+    'industry': {
+        'industrial', 'visit', 'field', 'manufacturing', 'production', 'business',
+        'enterprise', 'company', 'sector', 'innovation', 'technology', 'incubation',
+        'ecosystem', 'collaboration', 'partnership', 'academia'
+    },
+    'exposure': {
+        'visit', 'field', 'industrial', 'industry', 'tour', 'experience', 'learning',
+        'observation', 'practical', 'hands'
+    },
+    
+    # ==========================================================================
+    # Healthcare/MedTech/Biotech (for industrial visits)
+    # ==========================================================================
+    'medtech': {
+        'medical', 'healthcare', 'health', 'clinical', 'hospital', 'biomedical',
+        'diagnosis', 'treatment', 'device', 'equipment', 'technology', 'innovation',
+        'incubation', 'industry', 'zone', 'park', 'facility', 'manufacturing'
+    },
+    'healthcare': {
+        'medtech', 'medical', 'health', 'clinical', 'hospital', 'patient', 'care',
+        'treatment', 'diagnosis', 'biotechnology', 'pharmaceutical', 'pharma',
+        'innovation', 'technology', 'industry', 'advancing'
+    },
+    'medical': {
+        'medtech', 'healthcare', 'health', 'clinical', 'hospital', 'patient',
+        'diagnosis', 'treatment', 'device', 'equipment', 'biomedical', 'pharmaceutical'
+    },
+    'biotech': {
+        'biotechnology', 'medtech', 'healthcare', 'medical', 'pharmaceutical', 'pharma',
+        'research', 'development', 'innovation', 'technology', 'life', 'science'
+    },
+    'biotechnology': {
+        'biotech', 'medtech', 'healthcare', 'medical', 'pharmaceutical', 'pharma',
+        'research', 'development', 'innovation', 'technology', 'life', 'science'
+    },
+    'pharmaceutical': {
+        'pharma', 'medtech', 'healthcare', 'medical', 'biotech', 'biotechnology',
+        'drug', 'medicine', 'treatment', 'research', 'development', 'manufacturing'
+    },
+    'pharma': {
+        'pharmaceutical', 'medtech', 'healthcare', 'medical', 'biotech', 'biotechnology',
+        'drug', 'medicine', 'treatment', 'research', 'development', 'manufacturing'
+    },
+    
+    # ==========================================================================
+    # Facility/Zone/Park keywords (for industrial visits)
+    # ==========================================================================
+    'zone': {
+        'industrial', 'manufacturing', 'technology', 'tech', 'innovation', 'incubation',
+        'special', 'economic', 'sez', 'park', 'hub', 'facility', 'center', 'centre',
+        'medtech', 'biotech', 'pharma', 'amtz'
+    },
+    'park': {
+        'industrial', 'technology', 'tech', 'innovation', 'incubation', 'zone',
+        'hub', 'facility', 'center', 'centre', 'software', 'it', 'research'
+    },
+    'hub': {
+        'innovation', 'incubation', 'startup', 'entrepreneurship', 'technology',
+        'center', 'centre', 'ecosystem', 'zone', 'park', 'facility'
+    },
+    'facility': {
+        'industrial', 'manufacturing', 'production', 'plant', 'factory', 'zone',
+        'park', 'hub', 'center', 'centre', 'visit', 'tour', 'infrastructure'
+    },
+    'amtz': {
+        'medtech', 'medical', 'healthcare', 'health', 'technology', 'zone', 'park',
+        'andhra', 'pradesh', 'incubation', 'innovation', 'industry', 'manufacturing',
+        'facility', 'device', 'equipment', 'advancing', 'innovating'
+    },
+    
+    # ==========================================================================
+    # Action/Activity keywords (for better matching)
+    # ==========================================================================
+    'advancing': {
+        'innovation', 'progress', 'development', 'growth', 'improvement', 'industry',
+        'technology', 'healthcare', 'medtech'
+    },
+    'innovating': {
+        'innovation', 'creative', 'novel', 'new', 'development', 'technology',
+        'healthcare', 'medtech', 'industry'
+    },
+    'learning': {
+        'education', 'training', 'workshop', 'session', 'skill', 'knowledge',
+        'development', 'outcome', 'objective', 'experience', 'practical', 'hands'
+    },
+    'workshop': {
+        'training', 'session', 'learning', 'skill', 'development', 'hands', 'practical',
+        'entrepreneurship', 'innovation', 'design', 'thinking', 'ipr', 'incubation'
+    },
+    'session': {
+        'workshop', 'training', 'learning', 'presentation', 'talk', 'seminar',
+        'webinar', 'conference', 'event', 'program', 'programme'
+    },
+    'training': {
+        'workshop', 'session', 'learning', 'skill', 'development', 'education',
+        'program', 'programme', 'hands', 'practical'
+    },
 }
+
 
 
 def normalize_text(text: str) -> str:
