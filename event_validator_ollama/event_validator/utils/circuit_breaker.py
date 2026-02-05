@@ -264,3 +264,8 @@ def reset_ollama_circuit_breaker():
 def get_gemini_circuit_breaker() -> CircuitBreaker:
     """Get or create global circuit breaker (alias for get_ollama_circuit_breaker)."""
     return get_ollama_circuit_breaker()
+
+
+def reset_gemini_circuit_breaker():
+    """Reset circuit breaker (alias for reset_ollama_circuit_breaker)."""
+    reset_ollama_circuit_breaker()
