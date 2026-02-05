@@ -1,4 +1,4 @@
-"""Theme validation using hardcoded rules and Gemini."""
+"""Theme validation using hardcoded rules and Ollama."""
 import logging
 from typing import List, Optional
 from datetime import datetime
@@ -77,15 +77,15 @@ def validate_theme_alignment(
     # activity_name is the primary field containing the event title
     event_title_for_check = activity_name or user_title or expected_title
     
-    # Use Gemini for semantic alignment check (optimized: Gemini has higher capacity than Groq)
-    logger.debug("  Calling API for theme alignment check (using Gemini for better throughput)...")
+    # Use Ollama for semantic alignment check
+    logger.debug("  Calling Ollama API for theme alignment check...")
     logger.debug(f"  Using event title for theme check: {event_title_for_check[:100] if event_title_for_check else 'N/A'}")
     aligned = ollama_client.check_theme_alignment(
         title=event_title_for_check,
         objectives=objectives,
         learning_outcomes=learning_outcomes,
         theme=theme,
-        prefer_groq=False  # Use Gemini (150 RPM) instead of Groq (25 RPM) for better throughput
+        prefer_groq=False  # Using Ollama local model
     )
     
     if aligned:

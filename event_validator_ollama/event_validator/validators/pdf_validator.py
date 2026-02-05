@@ -1,4 +1,4 @@
-"""PDF validation using hardcoded rules and Gemini."""
+"""PDF validation using hardcoded rules and Ollama."""
 import logging
 from typing import List, Optional
 import hashlib

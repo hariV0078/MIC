@@ -662,8 +662,8 @@ def process_csv(
         logger.info("downloaded_files directory is already empty")
     
     # Reset circuit breakers to ensure fresh state for each run
-    from event_validator.utils.circuit_breaker import reset_gemini_circuit_breaker
-    reset_gemini_circuit_breaker()
+    from event_validator.utils.circuit_breaker import reset_ollama_circuit_breaker
+    reset_ollama_circuit_breaker()
     logger.info("Circuit breakers reset for new processing run")
     
     # Initialize Ollama client
@@ -699,11 +699,11 @@ def process_csv(
     reset_batch_hash_tracker()
     
     # Process rows in parallel for better performance
-    # Optimized for 8-minute target: 12 workers × 6 concurrent Gemini calls = 72 concurrent API calls
-    # With 148 RPM (145 effective after 98% safety), this provides maximum safe throughput
+    # Optimized for 8-minute target: 12 workers × 2 concurrent Ollama calls = 24 concurrent API calls
+    # With local Ollama, this provides maximum safe throughput
     max_workers = min(int(os.getenv('DEFAULT_MAX_WORKERS', '12')), len(rows))
-    from event_validator.utils.concurrency import GEMINI_MAX_CONCURRENT
-    logger.info(f"Processing {len(rows)} submissions with {max_workers} parallel workers (Ollama concurrency: {GEMINI_MAX_CONCURRENT})")
+    from event_validator.utils.concurrency import OLLAMA_MAX_CONCURRENT
+    logger.info(f"Processing {len(rows)} submissions with {max_workers} parallel workers (Ollama concurrency: {OLLAMA_MAX_CONCURRENT})")
     
     enriched_rows = [None] * len(rows)  # Pre-allocate list to maintain order
     
