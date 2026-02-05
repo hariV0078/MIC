@@ -91,3 +91,7 @@ def reset_semaphores():
     with _semaphore_lock:
         _ollama_semaphore = None
         logger.info("Concurrency semaphores reset")
+
+
+# Alias for backward compatibility with Gemini-based code
+gemini_concurrency_guard = ollama_concurrency_guard
