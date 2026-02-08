@@ -128,64 +128,7 @@ def validate_real_activity_scene(
         )
 
 
-def validate_event_mode_matches(
-    submission: EventSubmission,
-    analysis: Optional[dict] = None
-) -> ValidationResult:
-    """Check if event mode matches (online/offline)."""
-    rule_name, points = IMAGE_RULES[3]
-    
-    row_data = submission.row_data
-    event_mode = str(row_data.get('Event Mode', '')).strip().lower()
-    
-    # Get event_driven for special handling
-    original_data = getattr(submission, '_original_row_data', row_data)
-    event_driven = original_data.get('event_driven')
-    try:
-        event_driven = int(event_driven) if event_driven is not None else None
-    except (ValueError, TypeError):
-        event_driven = None
-    
-    # SPECIAL CASE: Event driven 2 is only online mode - give full score
-    if event_driven == 2:
-        logger.info(f"Event driven 2 detected - automatically passing event mode validation (online mode only)")
-        return ValidationResult(
-            criterion=rule_name,
-            passed=True,
-            points_awarded=points,
-            message="Event driven 2 - online mode only (auto-passed)"
-        )
-    
-    if not submission.images:
-        return ValidationResult(
-            criterion=rule_name,
-            passed=False,
-            points_awarded=0,
-            message="No images provided"
-        )
-    
-    if analysis is None:
-        return ValidationResult(
-            criterion=rule_name,
-            passed=False,
-            points_awarded=0,
-            message="Image analysis not provided"
-        )
-    
-    if analysis.get("mode_matches", False):
-        return ValidationResult(
-            criterion=rule_name,
-            passed=True,
-            points_awarded=points,
-            message=""
-        )
-    else:
-        return ValidationResult(
-            criterion=rule_name,
-            passed=False,
-            points_awarded=0,
-            message=f"Event mode in image does not match specified mode: {event_mode}"
-        )
+
 
 
 def validate_15_plus_participants_visible(
@@ -193,7 +136,7 @@ def validate_15_plus_participants_visible(
     analysis: Optional[dict] = None
 ) -> ValidationResult:
     """Check if 15+ participants are visible in images."""
-    rule_name, points = IMAGE_RULES[4]
+    rule_name, points = IMAGE_RULES[3]
     
     if not submission.images:
         return ValidationResult(
@@ -238,7 +181,6 @@ def validate_images(submission: EventSubmission, ollama_client: OllamaClient) ->
         # Return failed results for all validations if no images
         results.append(validate_banner_poster_visible(submission, None))
         results.append(validate_real_activity_scene(submission, None))
-        results.append(validate_event_mode_matches(submission, None))
         results.append(validate_15_plus_participants_visible(submission, None))
         return results
     
@@ -265,7 +207,7 @@ def validate_images(submission: EventSubmission, ollama_client: OllamaClient) ->
     # Reuse the same analysis result for all validation functions
     results.append(validate_banner_poster_visible(submission, analysis))
     results.append(validate_real_activity_scene(submission, analysis))
-    results.append(validate_event_mode_matches(submission, analysis))
+    # results.append(validate_event_mode_matches(submission, analysis)) # Removed
     results.append(validate_15_plus_participants_visible(submission, analysis))
     
     return results

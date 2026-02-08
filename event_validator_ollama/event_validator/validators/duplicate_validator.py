@@ -14,11 +14,16 @@ logger = logging.getLogger(__name__)
 # Global in-memory hash tracker for current batch
 _batch_hash_tracker: Dict[str, Dict[str, Any]] = {}
 
+# Global in-memory title tracker for current batch: (user_id, normalized_title) -> submission_id
+_batch_title_tracker: Dict[Tuple[str, str], str] = {}
+
 
 def reset_batch_hash_tracker():
-    """Reset the batch hash tracker (call at start of new batch)."""
-    global _batch_hash_tracker
+    """Reset the batch hash and title trackers (call at start of new batch)."""
+    global _batch_hash_tracker, _batch_title_tracker
     _batch_hash_tracker = {}
+    _batch_title_tracker = {}
+
 
 
 def validate_duplicate_detection(
@@ -208,6 +213,87 @@ def validate_duplicate_detection(
         )
 
 
+def normalize_title(title: str) -> str:
+    """Normalize title for duplicate checking (lowercase, strip, remove special chars)."""
+    if not title:
+        return ""
+    import re
+    # Remove non-alphanumeric characters and extra spaces
+    cleaned = re.sub(r'[^a-z0-9]', '', title.lower())
+    return cleaned
+
+
+def validate_duplicate_title(
+    submission: EventSubmission,
+    config: ValidationConfig,
+    submission_id: Optional[str] = None
+) -> ValidationResult:
+    """
+    Check if the same user has submitted the same activity name.
+    
+    Args:
+        submission: Event submission to check
+        config: Validation configuration
+        submission_id: Unique identifier for this submission
+    """
+    global _batch_title_tracker
+    
+    rule_name, points = SIMILARITY_RULES[1]  # "Duplicate title check"
+    
+    # Get user_id and activity_name
+    original_data = getattr(submission, '_original_row_data', submission.row_data)
+    # Try different field names for user ID
+    user_id = str(original_data.get('created_by', '')) 
+    if not user_id or user_id == 'nan':
+        user_id = str(original_data.get('user_id', ''))
+        
+    activity_name = str(original_data.get('activity_name', ''))
+    
+    if not user_id or user_id == 'nan' or not activity_name or activity_name == 'nan':
+        logger.warning(f"  SKIP: Missing user_id or activity_name for duplicate title check")
+        return ValidationResult(
+            criterion=rule_name,
+            passed=True,
+            points_awarded=points,
+            message="Skipped: Missing user_id or activity_name"
+        )
+        
+    norm_title = normalize_title(activity_name)
+    tracker_key = (user_id, norm_title)
+    
+    if tracker_key in _batch_title_tracker:
+        previous_id = _batch_title_tracker[tracker_key]
+        
+        # If it's the exact same submission ID (e.g. reprocessing), ignore
+        if previous_id == submission_id:
+            logger.info(f"  IGNORING: Title match within same submission ID {submission_id}")
+            return ValidationResult(
+                criterion=rule_name,
+                passed=True,
+                points_awarded=points,
+                message=""
+            )
+            
+        logger.warning(f"  FAIL: Duplicate title '{activity_name}' for user {user_id} (matches submission {previous_id})")
+        return ValidationResult(
+            criterion=rule_name,
+            passed=False,
+            points_awarded=-10,  # Negative points for failure
+            message=f"Duplicate title for same user (matches {previous_id})"
+        )
+    else:
+        # Add to tracker
+        _batch_title_tracker[tracker_key] = submission_id
+        
+        logger.info(f"  PASS: Unique title for user {user_id} | Points: {points}")
+        return ValidationResult(
+            criterion=rule_name,
+            passed=True,
+            points_awarded=points,
+            message=""
+        )
+
+
 def validate_duplicates(
     submission: EventSubmission,
     config: ValidationConfig,
@@ -222,5 +308,15 @@ def validate_duplicates(
         submission_id: Unique identifier for this submission
     """
     results = []
-    results.append(validate_duplicate_detection(submission, config, submission_id))
+    
+    # 1. Duplicate Image Check
+    img_result = validate_duplicate_detection(submission, config, submission_id)
+    if not img_result.passed:
+        img_result.points_awarded = -10 # Explicitly set negative points for image fail
+    results.append(img_result)
+    
+    # 2. Duplicate Title Check
+    title_result = validate_duplicate_title(submission, config, submission_id)
+    results.append(title_result)
+    
     return results

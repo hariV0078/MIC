@@ -7,6 +7,7 @@ This is an open-source version of the Event Validation System using Ollama inste
 - **Open Source**: Uses Ollama with local LLM models (no API keys required)
 - **Equivalent Functionality**: Same validation logic as the Gemini version
 - **Efficient**: Optimized for local deployment with caching and rate limiting
+- **Standardized Scoring**: Uses a 100-point evaluation model with a 60-point acceptance threshold
 - **Ubuntu Ready**: Includes setup scripts and configuration for Ubuntu servers
 
 ## Prerequisites

@@ -1,4 +1,4 @@
-"""PDF validation using hardcoded rules and Gemini."""
+"""PDF validation using hardcoded rules and Ollama."""
 import logging
 from typing import List, Optional
 import hashlib
@@ -106,17 +106,15 @@ def validate_expert_details(
         )
 
 
-def validate_objectives_learning_align(
+def validate_learning_outcomes_align(
     submission: EventSubmission,
     ollama_client: OllamaClient
 ) -> ValidationResult:
-    """Check if objectives and learning outcomes allow."""
-    # Rule 2: "Objectives and learning align" (6 pts)
+    """Check if learning outcomes align."""
     rule_name, points = PDF_RULES[2]
     
     row_data = submission.row_data
     expected_learning = str(row_data.get('Learning Outcomes', '')).strip()
-    expected_objectives = str(row_data.get('Objectives', '')).strip()
     
     if not submission.pdf_data or not submission.pdf_data.text:
         return ValidationResult(
@@ -127,16 +125,15 @@ def validate_objectives_learning_align(
         )
     
     # Use Groq for semantic alignment
-    consistency = ollama_client.check_pdf_consistency(
+        consistency = ollama_client.check_pdf_consistency(
         pdf_text=submission.pdf_data.text,
         expected_title=None,
-        expected_objectives=expected_objectives,
+        expected_objectives=None,
         expected_learning_outcomes=expected_learning,
         expected_participants=None
     )
     
-    # Pass if EITHER learning match OR objectives match
-    if consistency.get("learning_match", False) or consistency.get("objectives_match", False):
+    if consistency.get("learning_match", False):
         return ValidationResult(
             criterion=rule_name,
             passed=True,
@@ -148,7 +145,7 @@ def validate_objectives_learning_align(
             criterion=rule_name,
             passed=False,
             points_awarded=0,
-            message="Objectives/Learning outcomes in PDF do not align with expected values"
+            message="Learning outcomes in PDF do not align with expected outcomes"
         )
 
 
@@ -171,7 +168,7 @@ def validate_objectives_match(
         )
     
     # Use Groq for semantic alignment
-    consistency = ollama_client.check_pdf_consistency(
+        consistency = ollama_client.check_pdf_consistency(
         pdf_text=submission.pdf_data.text,
         expected_title=None,
         expected_objectives=expected_objectives,
@@ -219,7 +216,7 @@ def validate_participant_info_match(
         )
     
     # Use Groq for participant validation
-    consistency = ollama_client.check_pdf_consistency(
+        consistency = ollama_client.check_pdf_consistency(
         pdf_text=submission.pdf_data.text,
         expected_title=None,
         expected_objectives=None,
@@ -310,8 +307,6 @@ def validate_pdf(submission: EventSubmission, ollama_client: OllamaClient) -> Li
         expected_participants = int(float(participants_str))
     except (ValueError, TypeError):
         pass
-        
-    theme = str(row_data.get('Theme', '')).strip()
     
     # Generate PDF content hash for caching
     pdf_text = submission.pdf_data.text
@@ -344,10 +339,10 @@ def validate_pdf(submission: EventSubmission, ollama_client: OllamaClient) -> Li
     except (ValueError, TypeError):
         event_driven = None
     
+    # Map unified results to individual validation results
     # Rule 0: PDF title matches metadata (7 points)
     rule_name, points = PDF_RULES[0]
-    # Use the new, specific title validation function with theme awareness
-    title_match = ollama_client.validate_pdf_title(pdf_text, expected_title, theme) if expected_title else False
+    title_match = validation_results.get("title_match", False)
     results.append(ValidationResult(
         criterion=rule_name,
         passed=title_match,
@@ -366,8 +361,24 @@ def validate_pdf(submission: EventSubmission, ollama_client: OllamaClient) -> Li
             points_awarded=0,
             message="PDF title mismatch - all PDF validations failed for event_driven=3"
         ))
-        # Rule 2: Objectives and learning align (6 points) - FAIL
+        # Rule 2: Learning outcomes align (3 points) - FAIL
         rule_name, points = PDF_RULES[2]
+        results.append(ValidationResult(
+            criterion=rule_name,
+            passed=False,
+            points_awarded=0,
+            message="PDF title mismatch - all PDF validations failed for event_driven=3"
+        ))
+        # Rule 3: Objectives match (3 points) - FAIL
+        rule_name, points = PDF_RULES[3]
+        results.append(ValidationResult(
+            criterion=rule_name,
+            passed=False,
+            points_awarded=0,
+            message="PDF title mismatch - all PDF validations failed for event_driven=3"
+        ))
+        # Rule 4: Participant info matches (5 points) - FAIL
+        rule_name, points = PDF_RULES[4]
         results.append(ValidationResult(
             criterion=rule_name,
             passed=False,
@@ -387,22 +398,33 @@ def validate_pdf(submission: EventSubmission, ollama_client: OllamaClient) -> Li
         message="" if expert_passed else "Expert details not found in PDF"
     ))
     
-    # Rule 2: Objectives and learning align (6 points)
-    # SPECIAL CASE: If title doesn't match, this should probably fail too? 
-    # Current logic relies on semantic check results
+    # Rule 2: Learning outcomes align (3 points)
+    # SPECIAL CASE: If title doesn't match, learning outcomes should also fail
     rule_name, points = PDF_RULES[2]
-    
-    # Check both learning_match AND objectives_match from unified result
-    learning_passed = validation_results.get("learning_match", False) or validation_results.get("objectives_match", False)
-    
-    # If title failed, this fails too (per user request for strictness)
-    final_pass = learning_passed and title_match
-    
+    learning_passed = validation_results.get("learning_outcomes_align", False) and title_match
     results.append(ValidationResult(
         criterion=rule_name,
-        passed=final_pass,
-        points_awarded=points if final_pass else 0,
-        message="" if final_pass else ("Objectives/Learning outcomes not aligned" if title_match else "PDF title mismatch - objectives/learning validation failed")
+        passed=learning_passed,
+        points_awarded=points if learning_passed else 0,
+        message="" if learning_passed else ("Learning outcomes in PDF do not align with expected outcomes" if title_match else "PDF title mismatch - learning outcomes validation failed")
+    ))
+    
+    # Rule 3: Objectives match (3 points)
+    rule_name, points = PDF_RULES[3]
+    results.append(ValidationResult(
+        criterion=rule_name,
+        passed=validation_results.get("objectives_match", False),
+        points_awarded=points if validation_results.get("objectives_match", False) else 0,
+        message="" if validation_results.get("objectives_match", False) else "Objectives in PDF do not match expected objectives"
+    ))
+    
+    # Rule 4: Participant info matches (5 points)
+    rule_name, points = PDF_RULES[4]
+    results.append(ValidationResult(
+        criterion=rule_name,
+        passed=validation_results.get("participants_valid", False),
+        points_awarded=points if validation_results.get("participants_valid", False) else 0,
+        message="" if validation_results.get("participants_valid", False) else f"PDF participant information does not match expected (needs 15+ participants)"
     ))
     
     logger.debug(f"PDF validation complete. Reasoning: {validation_results.get('reasoning', 'N/A')}")

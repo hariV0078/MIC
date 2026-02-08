@@ -1,4 +1,4 @@
-"""Theme validation using hardcoded rules and Gemini."""
+"""Theme validation using hardcoded rules and Ollama."""
 import logging
 from typing import List, Optional
 from datetime import datetime
@@ -77,12 +77,15 @@ def validate_theme_alignment(
     # activity_name is the primary field containing the event title
     event_title_for_check = activity_name or user_title or expected_title
     
-    # Use the new, more direct theme alignment check
-    logger.debug("  Calling API for theme alignment check...")
+    # Use Ollama for semantic alignment check
+    logger.debug("  Calling Ollama API for theme alignment check...")
+    logger.debug(f"  Using event title for theme check: {event_title_for_check[:100] if event_title_for_check else 'N/A'}")
     aligned = ollama_client.check_theme_alignment(
         title=event_title_for_check,
         objectives=objectives,
-        theme=theme
+        learning_outcomes=learning_outcomes,
+        theme=theme,
+        prefer_groq=False  # Using Ollama local model
     )
     
     if aligned:
@@ -241,13 +244,13 @@ def validate_participants_reported(
     submission: EventSubmission,
     ollama_client: Optional[OllamaClient] = None
 ) -> ValidationResult:
-    """Check participants > 15."""
-    rule_name, points = THEME_RULES[2]
+    """Check participants with graduated scoring scale."""
+    rule_name, max_points = THEME_RULES[2]  # max_points = 12
     
     row_data = submission.row_data
     participants_str = str(row_data.get('Participants', '0')).strip()
     
-    logger.info(f"Checking: {rule_name} ({points} points)")
+    logger.info(f"Checking: {rule_name} ({max_points} points)")
     
     try:
         participants = int(float(participants_str))
@@ -256,25 +259,50 @@ def validate_participants_reported(
     
     logger.debug(f"  Participants: {participants}")
     
-    # Simple rule: > 15 participants = 10 points, else 0
-    # User's table says "Participant >15". Usually implies >= 15 or strictly > 15?
-    # Previous rule was >= 15. Let's stick to >= 15 as per "15 participant visible" rule logic too.
-    if participants >= 15:
-        logger.info(f"  PASS: {participants} participants reported (>= 15) | Points: {points}")
-        return ValidationResult(
-            criterion=rule_name,
-            passed=True,
-            points_awarded=points,
-            message=""
-        )
+    # Graduated scoring scale:
+    # >= 20: 12 points (full score)
+    # 19: 11.4 points
+    # 18: 10.8 points
+    # 17: 10.2 points
+    # 16: 9.6 points
+    # 15: 9 points
+    # < 15: 0 points (reject)
+    
+    if participants >= 20:
+        points_awarded = 12.0
+        passed = True
+        logger.info(f"  PASS: {participants} participants reported (>= 20) | Points: {points_awarded}")
+    elif participants == 19:
+        points_awarded = 11.4
+        passed = True
+        logger.info(f"  PASS: {participants} participants reported | Points: {points_awarded}")
+    elif participants == 18:
+        points_awarded = 10.8
+        passed = True
+        logger.info(f"  PASS: {participants} participants reported | Points: {points_awarded}")
+    elif participants == 17:
+        points_awarded = 10.2
+        passed = True
+        logger.info(f"  PASS: {participants} participants reported | Points: {points_awarded}")
+    elif participants == 16:
+        points_awarded = 9.6
+        passed = True
+        logger.info(f"  PASS: {participants} participants reported | Points: {points_awarded}")
+    elif participants == 15:
+        points_awarded = 9.0
+        passed = True
+        logger.info(f"  PASS: {participants} participants reported | Points: {points_awarded}")
     else:
-        logger.warning(f"  FAIL: {participants} participants reported (< 15) | Points: 0")
-        return ValidationResult(
-            criterion=rule_name,
-            passed=False,
-            points_awarded=0,
-            message=f"Participants reported: {participants} (needs >= 15)"
-        )
+        points_awarded = 0.0
+        passed = False
+        logger.warning(f"  FAIL: {participants} participants reported (< 15) | Points: {points_awarded}")
+    
+    return ValidationResult(
+        criterion=rule_name,
+        passed=passed,
+        points_awarded=points_awarded,
+        message="" if passed else f"Participants reported: {participants} (needs >= 15)"
+    )
 
 
 def validate_year_alignment(
@@ -367,6 +395,7 @@ def validate_theme(submission: EventSubmission, ollama_client: OllamaClient) -> 
     results.append(validate_level_duration(submission))
     results.append(validate_participants_reported(submission))
     # Year alignment validation is DISABLED per user request
+    # User provides dates in from_date, to_date, and academic_year - no need to validate against current date
     # results.append(validate_year_alignment(submission))
     
     return results
