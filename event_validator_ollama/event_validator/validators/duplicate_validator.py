@@ -1,6 +1,6 @@
 """Duplicate detection with directory-level scanning."""
 import logging
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Tuple
 
 from event_validator.types import ValidationResult, EventSubmission
 from event_validator.config.rules import SIMILARITY_RULES
