@@ -38,14 +38,19 @@ class OllamaClient:
     def _get_cache_key(self, prompt: str, model: str) -> str:
         return hashlib.sha256(f"{model}:{prompt}".encode()).hexdigest()
 
-    def _call_ollama(self, prompt: str, model: str, max_retries: int = 2, use_cache: bool = True) -> Optional[str]:
+    def _call_ollama(self, prompt: str, model: str, max_retries: int = 2, use_cache: bool = True, options: Optional[Dict] = None) -> Optional[str]:
         if not self.client: return None
         cache_key = self._get_cache_key(prompt, model)
         if use_cache and cache_key in _ollama_response_cache: return _ollama_response_cache[cache_key]
         
+        # Merge default options with user options
+        final_options = {'temperature': 0.0}
+        if options:
+            final_options.update(options)
+        
         for attempt in range(max_retries):
             try:
-                response = self.client.generate(model=model, prompt=prompt, options={'temperature': 0.0})
+                response = self.client.generate(model=model, prompt=prompt, options=final_options)
                 response_text = response.get('response', '').strip()
                 if response_text:
                     if use_cache: _ollama_response_cache[cache_key] = response_text
@@ -55,6 +60,7 @@ class OllamaClient:
                 logger.warning(f"Ollama attempt {attempt+1} failed: {e}")
                 time.sleep(1)
         return None
+
 
     def _clean_title(self, title: str, theme: str = "") -> str:
         """
@@ -196,20 +202,44 @@ class OllamaClient:
 
     def validate_pdf_title(self, pdf_text: str, expected_title: str, theme: str = "") -> bool:
         """
-        Validate PDF title using the same cleaning logic as theme alignment.
+        Validate PDF title using hybrid approach:
+        1. Clean String Matching (Method 1 - Fast & Strict)
+        2. LLM Semantic Check (Method 2 - Robust Fallback)
         """
         # Extract title if possible
         extracted_pdf_title = self.extract_title_with_llm(pdf_text)
         if not extracted_pdf_title:
             return False
             
-        # Clean both titles using the shared normalization logic
+        # Method 1: Clean String Matching
         cleaned_pdf_title = self._clean_title(extracted_pdf_title, theme)
         cleaned_expected_title = self._clean_title(expected_title, theme)
         
         # Check for containment or fuzzy match
-        # If the 'core' activity is preserved in both, they should match
-        return (cleaned_pdf_title in cleaned_expected_title) or (cleaned_expected_title in cleaned_pdf_title)
+        if (cleaned_pdf_title in cleaned_expected_title) or (cleaned_expected_title in cleaned_pdf_title):
+            return True
+            
+        # Method 2: LLM Semantic Check (Fallback)
+        # This mirrors the robustness of checking_iic_alignment
+        prompt = f"""
+        Compare these two event titles. Are they referring to the SAME event?
+        
+        Title 1 (From Metadata): {expected_title}
+        Title 2 (Extracted from PDF): {extracted_pdf_title}
+        
+        Consider:
+        - Minor variations (e.g. "Workshop on X" vs "Report on X")
+        - Abbreviations (e.g. "IIC" vs "Institution's Innovation Council")
+        - Formatting differences
+        
+        Respont ONLY with "YES" or "NO".
+        """
+        response = self._call_ollama(prompt, model=self.text_model, use_cache=True)
+        if response and "YES" in response.upper():
+            return True
+            
+        return False
+
 
     def validate_pdf_comprehensive(
         self, 
@@ -240,7 +270,7 @@ class OllamaClient:
         3. Do the learning outcomes align with: "{expected_learning_outcomes}"?
         4. Does the text confirm {expected_participants}+ participants attended?
         
-        OUTPUT JSON (boolean values):
+        OUTPUT JSON ONLY:
         {{
             "expert_details_present": true/false,
             "objectives_match": true/false,
@@ -250,7 +280,8 @@ class OllamaClient:
         }}
         """
         
-        response = self._call_ollama(prompt, model=self.text_model, use_cache=True)
+        response = self._call_ollama(prompt, model=self.text_model, use_cache=True, options={'format': 'json'})
+
         
         default_result = {
             "expert_details_present": False,
@@ -287,29 +318,63 @@ class OllamaClient:
         """Legacy alias"""
         return self.validate_pdf_comprehensive(*args, **kwargs)
 
-    def analyze_image(self, image_data: bytes, prompt: str = "Describe this image provided.") -> str:
+    def analyze_image(self, image_path: str, event_mode: str = "", event_title: str = "", event_theme: str = "") -> Dict[str, Any]:
         """
         Analyze an image using the vision model.
-        
-        Args:
-            image_data: Raw bytes of the image
-            prompt: Question or instruction for the model
-            
-        Returns:
-            Model response text
+        Returns a dictionary with validation flags.
         """
         if not self.client:
-            return ""
+            return {}
             
         try:
+            # Read image bytes
+            with open(image_path, 'rb') as f:
+                image_data = f.read()
+                
+            prompt = f"""
+            Analyze this event photo for a validation system.
+            Event Title: {event_title}
+            Event Theme: {event_theme}
+            
+            CHECKLIST:
+            1. Is there a banner or poster visible? (Yes/No)
+            2. Is this a real event scene (people, interaction) or just a static object/screenshot? (Real/Fake)
+            3. Are there more than 15 participants visible? (Yes/No)
+            4. Does the scene match a '{event_mode}' event? (Yes/No)
+            
+            OUTPUT JSON ONLY (No markdown, no explanation outside JSON):
+            {{
+                "banner_detected": true,
+                "real_event_scene": true,
+                "has_15_plus_participants": true,
+                "mode_match": true,
+                "description": "short description"
+            }}
+            """
+            
             # Ollama expects images as list of bytes or base64 strings
             response = self.client.generate(
                 model=self.vision_model,
                 prompt=prompt,
                 images=[image_data],
-                options={'temperature': 0.0}
+                options={'temperature': 0.0, 'format': 'json'}  # Try forcing JSON mode if supported
             )
-            return response.get('response', '').strip()
+
+            response_text = response.get('response', '').strip()
+            
+            # Parse JSON
+            try:
+                json_str = response_text
+                if "```json" in response_text:
+                    json_str = response_text.split("```json")[1].split("```")[0]
+                elif "{" in response_text:
+                    json_str = "{" + response_text.split("{", 1)[1].rsplit("}", 1)[0] + "}"
+                
+                return json.loads(json_str)
+            except Exception:
+                logger.warning(f"Failed to parse image analysis JSON: {response_text[:100]}...")
+                return {}
+                
         except Exception as e:
-            logger.error(f"Error analyzing image: {e}")
-            return ""
+            logger.error(f"Error analyzing image {image_path}: {e}")
+            return {}
