@@ -286,3 +286,30 @@ class OllamaClient:
     def check_pdf_consistency(self, *args, **kwargs):
         """Legacy alias"""
         return self.validate_pdf_comprehensive(*args, **kwargs)
+
+    def analyze_image(self, image_data: bytes, prompt: str = "Describe this image provided.") -> str:
+        """
+        Analyze an image using the vision model.
+        
+        Args:
+            image_data: Raw bytes of the image
+            prompt: Question or instruction for the model
+            
+        Returns:
+            Model response text
+        """
+        if not self.client:
+            return ""
+            
+        try:
+            # Ollama expects images as list of bytes or base64 strings
+            response = self.client.generate(
+                model=self.vision_model,
+                prompt=prompt,
+                images=[image_data],
+                options={'temperature': 0.0}
+            )
+            return response.get('response', '').strip()
+        except Exception as e:
+            logger.error(f"Error analyzing image: {e}")
+            return ""
