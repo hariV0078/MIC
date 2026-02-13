@@ -24,6 +24,10 @@ requests>=2.31.0
 # Environment variables
 python-dotenv>=1.0.0
 
+# Fuzzy string matching for PDF title validation
+thefuzz>=0.22.1
+python-Levenshtein>=0.25.0
+
 # Optional: OCR support (uncomment if needed)
 # pdf2image>=1.16.0
 # pytesseract>=0.3.10

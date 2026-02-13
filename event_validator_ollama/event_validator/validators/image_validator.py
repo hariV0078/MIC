@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 def validate_geotag_present(
     submission: EventSubmission,
-    ollama_client: Optional[OllamaClient] = None
+    text_analysis: Optional[dict] = None
 ) -> ValidationResult:
     """Check if geotag is present in images."""
     rule_name, points = IMAGE_RULES[0]
@@ -32,6 +32,16 @@ def validate_geotag_present(
     has_geotag = any(img.has_geotag for img in submission.images)
     logger.debug(f"  Images checked: {len(submission.images)}, Geotag found: {has_geotag}")
     
+    # If metadata check failed, try visual geotag check using OCR text
+    if not has_geotag and text_analysis and text_analysis.get("has_visual_geotag", False):
+        logger.info(f"  PASS: Visual geotag/overlay detected in image | Points: {points}")
+        return ValidationResult(
+            criterion=rule_name,
+            passed=True,
+            points_awarded=points,
+            message="Visual geotag overlay detected"
+        )
+
     if has_geotag:
         logger.info(f"  PASS: Geotag found in images | Points: {points}")
         return ValidationResult(
@@ -52,9 +62,16 @@ def validate_geotag_present(
 
 def validate_banner_poster_visible(
     submission: EventSubmission,
-    analysis: Optional[dict] = None
+    analysis: Optional[dict] = None,
+    text_analysis: Optional[dict] = None
 ) -> ValidationResult:
-    """Check if banner/poster is visible in images."""
+    """Check if banner/poster is visible in images.
+    
+    Uses two methods:
+    1. Vision model banner detection (has_banner)
+    2. Text extraction from image - checks for event details (date, time, event type, etc.)
+    Passes if EITHER method succeeds.
+    """
     rule_name, points = IMAGE_RULES[1]
     
     if not submission.images:
@@ -73,7 +90,18 @@ def validate_banner_poster_visible(
             message="Image analysis not provided"
         )
     
-    if analysis.get("has_banner", False):
+    # Method 1: Original banner detection from vision model
+    has_banner = analysis.get("has_banner", False)
+    
+    # Method 2: Extract text from image and check for event details
+    has_event_details = False
+    if text_analysis:
+        has_event_details = text_analysis.get("has_event_details", False)
+        if has_event_details:
+            details = text_analysis.get("event_details_found", [])
+            logger.info(f"Banner check: event details found in image text: {details}")
+    
+    if has_banner or has_event_details:
         return ValidationResult(
             criterion=rule_name,
             passed=True,
@@ -112,7 +140,8 @@ def validate_real_activity_scene(
             message="Image analysis not provided"
         )
     
-    if analysis.get("is_real_event", False):
+    # Pass if real event detected OR 15+ participants visible (participants imply real event)
+    if analysis.get("is_real_event", False) or analysis.get("has_15_plus_participants", False):
         return ValidationResult(
             criterion=rule_name,
             passed=True,
@@ -175,10 +204,11 @@ def validate_images(submission: EventSubmission, ollama_client: OllamaClient) ->
     results = []
     
     # Geotag validation is ENABLED
-    results.append(validate_geotag_present(submission))
+    # Geotag validation will be run after text extraction
     
     if not submission.images:
         # Return failed results for all validations if no images
+        results.append(validate_geotag_present(submission))
         results.append(validate_banner_poster_visible(submission, None))
         results.append(validate_real_activity_scene(submission, None))
         results.append(validate_15_plus_participants_visible(submission, None))
@@ -205,9 +235,18 @@ def validate_images(submission: EventSubmission, ollama_client: OllamaClient) ->
     )
     
     # Reuse the same analysis result for all validation functions
-    results.append(validate_banner_poster_visible(submission, analysis))
+    # Extract text from image for banner and geotag checks
+    logger.info(f"Extracting text from image for validations: {image_path.name}")
+    text_analysis = ollama_client.extract_text_from_image(str(image_path))
+    
+    # Run validations
+    results.append(validate_geotag_present(submission, text_analysis))
+    
+    results.append(validate_banner_poster_visible(
+        submission, analysis,
+        text_analysis=text_analysis
+    ))
     results.append(validate_real_activity_scene(submission, analysis))
-    # results.append(validate_event_mode_matches(submission, analysis)) # Removed
     results.append(validate_15_plus_participants_visible(submission, analysis))
     
     return results

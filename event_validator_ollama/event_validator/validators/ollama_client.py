@@ -370,7 +370,16 @@ class OllamaClient:
                 elif "{" in response_text:
                     json_str = "{" + response_text.split("{", 1)[1].rsplit("}", 1)[0] + "}"
                 
-                return json.loads(json_str)
+                result = json.loads(json_str)
+                # Normalize key names to match what image_validator.py expects
+                # The prompt uses banner_detected/real_event_scene but validators read has_banner/is_real_event
+                normalized = {}
+                normalized["has_banner"] = result.get("has_banner", result.get("banner_detected", False))
+                normalized["is_real_event"] = result.get("is_real_event", result.get("real_event_scene", False))
+                normalized["has_15_plus_participants"] = result.get("has_15_plus_participants", False)
+                normalized["mode_match"] = result.get("mode_match", False)
+                normalized["description"] = result.get("description", "")
+                return normalized
             except Exception:
                 logger.warning(f"Failed to parse image analysis JSON: {response_text[:100]}...")
                 return {}
@@ -378,3 +387,127 @@ class OllamaClient:
         except Exception as e:
             logger.error(f"Error analyzing image {image_path}: {e}")
             return {}
+
+    def extract_text_from_image(self, image_path: str) -> Dict[str, Any]:
+        """
+        Extract text from an image using the vision model (OCR-like).
+        Then check if event details (date, time, title, event type) are present.
+        
+        Returns:
+            Dict with keys: extracted_text, has_event_details, event_details_found
+        """
+        result = {
+            "extracted_text": "",
+            "has_event_details": False,
+            "event_details_found": []
+        }
+        
+        if not self.client:
+            return result
+        
+        try:
+            with open(image_path, 'rb') as f:
+                image_data = f.read()
+            
+            prompt = """Read ALL text visible in this image. Extract every word, number, date, and line of text you can see.
+            
+OUTPUT: Return ONLY the extracted text, nothing else. If no text is visible, return "NO TEXT FOUND"."""
+            
+            response = self.client.generate(
+                model=self.vision_model,
+                prompt=prompt,
+                images=[image_data],
+                options={'temperature': 0.0}
+            )
+            
+            extracted_text = response.get('response', '').strip()
+            result["extracted_text"] = extracted_text
+            
+            if not extracted_text or extracted_text.upper() == "NO TEXT FOUND":
+                return result
+            
+            text_lower = extracted_text.lower()
+            details_found = []
+            
+            # Check for date patterns (DD/MM/YYYY, DD-MM-YYYY, Month Day Year, etc.)
+            date_patterns = [
+                r'\d{1,2}[/\-\.]\d{1,2}[/\-\.]\d{2,4}',
+                r'(january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{1,2}',
+                r'\d{1,2}\s+(january|february|march|april|may|june|july|august|september|october|november|december)',
+                r'\d{1,2}(st|nd|rd|th)\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)',
+            ]
+            for pattern in date_patterns:
+                if re.search(pattern, text_lower):
+                    details_found.append("date")
+                    break
+            
+            # Check for time patterns (HH:MM, AM/PM)
+            time_patterns = [
+                r'\d{1,2}:\d{2}',
+                r'\d{1,2}\s*(am|pm|a\.m\.|p\.m\.)',
+            ]
+            for pattern in time_patterns:
+                if re.search(pattern, text_lower):
+                    details_found.append("time")
+                    break
+            
+            # Check for event type keywords
+            event_keywords = [
+                'workshop', 'seminar', 'webinar', 'conference', 'symposium',
+                'hackathon', 'bootcamp', 'session', 'lecture', 'summit',
+                'training', 'orientation', 'inauguration', 'event', 'program',
+                'programme', 'meet', 'fest', 'expo', 'competition',
+                'guest lecture', 'field visit', 'industry visit',
+            ]
+            for kw in event_keywords:
+                if kw in text_lower:
+                    details_found.append(f"event_type:{kw}")
+                    break
+            
+            # Check for venue/location keywords
+            venue_keywords = [
+                'hall', 'auditorium', 'room', 'lab', 'laboratory', 'campus',
+                'building', 'block', 'floor', 'center', 'centre', 'venue',
+                'college', 'university', 'institute', 'department',
+            ]
+            for kw in venue_keywords:
+                if kw in text_lower:
+                    details_found.append(f"venue:{kw}")
+                    break
+            
+            # Check for title-like content (capitalized phrases, theme mentions)
+            title_keywords = [
+                'innovation', 'entrepreneurship', 'startup', 'design thinking',
+                'iic', 'institution', 'council', 'theme', 'topic',
+            ]
+            for kw in title_keywords:
+                if kw in text_lower:
+                    details_found.append(f"title:{kw}")
+                    break
+            
+            # Check for visual geotag indicators (GPS coordinates, map overlays)
+            geotag_indicators = [
+                r'lat\s*[:\.]?\s*\d+',
+                r'long\s*[:\.]?\s*\d+',
+                r'gps\s*map\s*camera',
+                r'altitude',
+                r'\d+\.\d+\s*,\s*\d+\.\d+',  # decimal coordinates
+                r'\d+°\s*\d+\'?\s*\d+"?\s*[NSEW]',  # DMS coordinates
+            ]
+            for indicator in geotag_indicators:
+                if re.search(indicator, text_lower):
+                    details_found.append("visual_geotag")
+                    break
+            
+            result["event_details_found"] = details_found
+            # Pass if at least 1 event detail found
+            result["has_event_details"] = len(details_found) >= 1
+            result["has_visual_geotag"] = "visual_geotag" in details_found
+            
+            logger.info(f"Banner/Geotag text extraction: found {len(details_found)} details: {details_found}")
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error extracting text from image {image_path}: {e}")
+            return result
