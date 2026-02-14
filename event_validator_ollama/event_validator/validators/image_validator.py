@@ -51,6 +51,11 @@ def validate_geotag_present(
             message=""
         )
     else:
+        # Debugging: Why did visual check fail?
+        if text_analysis and "extracted_text" in text_analysis:
+            preview = text_analysis["extracted_text"][:200].replace("\n", " ")
+            logger.debug(f"  Visual Geotag Failed. OCR extracted: '{preview}...'")
+            
         logger.warning(f"  FAIL: No geotag found in any image | Points: 0")
         return ValidationResult(
             criterion=rule_name,

@@ -48,9 +48,14 @@ class OllamaClient:
         if options:
             final_options.update(options)
         
+        # Import concurrency guard (delayed import to avoid circular dependencies if any)
+        from event_validator.utils.concurrency import ollama_concurrency_guard
+        
         for attempt in range(max_retries):
             try:
-                response = self.client.generate(model=model, prompt=prompt, options=final_options)
+                with ollama_concurrency_guard():
+                    response = self.client.generate(model=model, prompt=prompt, options=final_options)
+                
                 response_text = response.get('response', '').strip()
                 if response_text:
                     if use_cache: _ollama_response_cache[cache_key] = response_text
@@ -365,10 +370,24 @@ class OllamaClient:
             # Parse JSON
             try:
                 json_str = response_text
-                if "```json" in response_text:
-                    json_str = response_text.split("```json")[1].split("```")[0]
-                elif "{" in response_text:
-                    json_str = "{" + response_text.split("{", 1)[1].rsplit("}", 1)[0] + "}"
+                # Try to extract from markdown code blocks first
+                if "```" in response_text:
+                    # Handle both ```json and just ```
+                    blocks = response_text.split("```")
+                    for block in blocks:
+                        block = block.strip()
+                        if block.startswith("json"):
+                            block = block[4:].strip()
+                        if block.startswith("{") and block.endswith("}"):
+                            json_str = block
+                            break
+                
+                # Fallback: find first { and last }
+                if "{" in json_str:
+                    json_str = "{" + json_str.split("{", 1)[1].rsplit("}", 1)[0] + "}"
+                
+                # Clean up potential Python booleans/None to valid JSON
+                json_str = json_str.replace("True", "true").replace("False", "false").replace("None", "null")
                 
                 result = json.loads(json_str)
                 # Normalize key names to match what image_validator.py expects
