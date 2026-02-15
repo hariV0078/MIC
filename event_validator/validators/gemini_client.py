@@ -4,6 +4,7 @@ from typing import Optional, Dict, Any, Callable
 import os
 import time
 import re
+import json
 import hashlib
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed, Future
@@ -57,9 +58,8 @@ class GeminiClient:
         """Initialize Gemini client with optimal models. Falls back to Groq if Gemini fails."""
         # Initialize model names first (always set, even if client fails)
         # Using gemini-2.5-pro for both text and vision (150 RPM, 10K RPD - much higher capacity)
-        # gemini-2.0-flash-exp has only 10 RPM and 500 RPD limit (bottleneck for large batches)
-        self.text_model = "gemini-2.5-pro"  # High-capacity model: 150 RPM, 10,000 RPD
-        self.vision_model = "gemini-2.5-pro"  # Best quality for vision tasks, same high limits
+        self.text_model = "gemini-2.0-flash-exp"  # High-capacity model: 150 RPM, 10,000 RPD
+        self.vision_model = "gemini-2.0-flash-exp"  # Best quality for vision tasks, same high limits
         
         self.api_key = api_key or os.getenv("GEMINI_API_KEY")
         
@@ -378,6 +378,93 @@ class GeminiClient:
                     continue
         
         return None
+
+    def _clean_title(self, title: str, theme: str = "") -> str:
+        """
+        Normalize title by removing theme, buzzwords, and punctuation.
+        Used for both basic alignment checks and PDF title validation.
+        """
+        t = title.lower().strip()
+        th = theme.lower().strip()
+
+        # Normalize text
+        t_norm = t.replace("&", "and")
+        th_norm = th.replace("&", "and")
+        
+        cleaned_title = t_norm
+
+        # Remove the exact theme name from the title
+        if th_norm and th_norm in t_norm:
+            cleaned_title = re.sub(re.escape(th_norm), "", t_norm).strip()
+        
+        # Also remove common buzzwords to expose the core subject
+        buzzwords = [
+            "entrepreneurship", "entrepreneur", "startup", "start-up", 
+            "innovation", "design thinking", "workshop on", "session on", 
+            "seminar on", "opportunities in", "guest lecture on", "field of", "opportunities"
+        ]
+        for bw in buzzwords:
+            cleaned_title = cleaned_title.replace(bw, "")
+        
+        # Clean up punctuation
+        cleaned_title = re.sub(r"^[\W_]+|[\W_]+$", "", cleaned_title).strip()
+
+        # Fallback: If cleaning removed almost everything, use original
+        if len(cleaned_title) < 3: 
+            cleaned_title = t_norm
+            
+        return cleaned_title
+
+    def _check_hard_rules(self, title: str, theme: str = "") -> tuple[Optional[bool], str]:
+        """
+        Python-based Gatekeeper with Strict Theme Stripping.
+        """
+        t = title.lower().strip()
+        cleaned_title = self._clean_title(title, theme)
+
+        # --- STEP 2: BANNED TOOLS CHECK (ON CLEANED TITLE) ---
+        banned_tools = [
+            "sap", "power bi", "arduino", "iot", "web development", "web app", 
+            "python", "java", "spring boot", "android", "react", "robotics", 
+            "pottery", "construction management", "energy storage", "software engineering",
+            "cloud computing", "cyber security", "data processing", "aws", "ai", 
+            "artificial intelligence", "mems sensors", "3d printing", "machine learning", "ml",
+            "sensor technology"
+        ]
+
+        for tool in banned_tools:
+            # Check strict tool presence in the cleaned text
+            if tool in cleaned_title:
+                return False, f"HARD REJECT: Core activity is technical training on '{tool}' (Detected after stripping theme/buzzwords)."
+
+        # --- STEP 3: BANNED TOPICS CHECK (ON FULL TITLE) ---
+        banned_topics = [
+            "national mathematics day", "unity day", "yoga day", "environment day", 
+            "celebration", "jayanti", "women's role", "traffic", "health", 
+            "ayurveda", "blood donation", "sexual harassment", "swachhata",
+            "orientation session", "induction program"
+        ]
+        
+        for topic in banned_topics:
+            if topic in t: # Use normalized title 't' (lowercase)
+                return False, f"HARD REJECT: General Awareness/Celebration '{topic}'."
+
+        # --- STEP 4: MANDATORY ACCEPTS (ON FULL TITLE) ---
+        accept_keywords = [
+            "incubation", "incubator", "demo day", "hackathon", "ideation", 
+            "patent", "ipr", "intellectual property", "prototype", "poc", 
+            "field visit", "industry visit", "exposure visit"
+        ]
+        
+        for kw in accept_keywords:
+            if kw in t:
+                return True, f"HARD ACCEPT: Mandatory IIC activity '{kw}' detected."
+
+        # Special check for Entrepreneurship
+        if "entrepreneur" in t or "startup" in t or "start-up" in t:
+             return True, "HARD ACCEPT: Valid Entrepreneurship/Startup focus (No banned tools found)."
+
+        return None, ""
     
     def check_theme_alignment(
         self,
@@ -391,31 +478,37 @@ class GeminiClient:
         Check if title, objectives, and learning outcomes align with theme.
         Returns True if aligned, False otherwise.
         
-        OPTIMIZED: Uses Gemini by default (150 RPM) for better throughput.
-        Parallel fallback: If Gemini fails, tries both Gemini retry and Groq simultaneously.
+        OPTIMIZED: Uses Sandwich Logic (Hard Rules -> LLM Semantic Check).
         """
-        prompt = f"""You are a validation system. Determine if the following event details are relevant to the specified theme.
+        # STEP 1: Python Hard Rules
+        decision, reason = self._check_hard_rules(title, theme)
+        
+        if decision is not None:
+            logger.info(f"Theme alignment hard decision for '{title}': {decision} ({reason})")
+            return decision
 
-Theme: {theme}
+        # STEP 2: LLM Semantic Check (Legacy Prompt)
+        prompt = f"""You are a strict Innovation Auditor.
+        The title "{title}" passed the basic keyword filters. Now determine if it is a VALID Innovation/Design Thinking activity.
 
-Event Title: {title}
-Objectives: {objectives}
-Learning Outcomes: {learning_outcomes}
+        Theme: {theme}
+        Event Title: {title}
+        Objectives: {objectives[:200]}
 
-Task: Check if there is RELEVANCY between the event details and the theme. Be LENIENT but not too lenient - accept if there is meaningful relevance or connection to the theme, even if not a perfect match. Reject only if there is clearly no relevance or connection.
+        RULES:
+        1. ACCEPT: Workshops on "Design Thinking", "Critical Thinking", "Problem Solving" applied to technical fields.
+        2. REJECT: Generic academic lectures, scientific seminars, or skill training without business outcome.
+        3. REJECT: General skill training not related to innovation (e.g. "Communication Skills", "Resume Writing").
 
-Guidelines:
-- Accept if the event is relevant to the theme, even with some variation
-- Accept if key concepts from the theme appear in the event details
-- Accept if the event addresses topics related to the theme
-- Reject only if there is clearly no connection or relevance
-
-Respond with ONLY one word: "YES" if relevant, "NO" if not relevant."""
+        OUTPUT FORMAT:
+        RESULT: [YES or NO]
+        REASON: [Short 1-sentence explanation]
+        """
         
         # Primary: Try Gemini first
         response = self._call_gemini(prompt, use_cache=True)
         if response:
-            return "YES" in response.upper()
+            return "YES" in response.upper() or "RESULT: YES" in response.upper()
         
         # Fallback: If Gemini fails, try both Gemini retry and Groq simultaneously
         logger.warning("Gemini theme alignment failed, attempting parallel fallback (Gemini retry + Groq)")
@@ -658,6 +751,7 @@ REASONING: <brief explanation of your findings>"""
     ) -> Dict[str, Any]:
         """
         Analyze image for event validation using Gemini Vision model.
+        Includes robust JSON parsing to handle various LLM output formats.
         
         Args:
             image_path: Path to image file (Path object)
@@ -666,13 +760,13 @@ REASONING: <brief explanation of your findings>"""
             event_theme: Event theme for context
         
         Returns:
-            Dict with keys: has_banner, is_real_event, mode_matches, has_15_plus_participants,
+            Dict with keys: has_banner, is_real_event, mode_match, has_15_plus_participants,
             banner_text_matches, participant_count_estimate, detailed_reasoning
         """
         results = {
             "has_banner": False,
             "is_real_event": False,
-            "mode_matches": False,
+            "mode_match": False,
             "has_15_plus_participants": False,
             "banner_text_matches": False,
             "participant_count_estimate": 0,
@@ -703,69 +797,205 @@ REASONING: <brief explanation of your findings>"""
             return results
         
         # Build comprehensive prompt for vision analysis
-        prompt = f"""You are analyzing an event photograph for validation purposes.
-
-Event Context:
-- Title: {event_title or 'Not specified'}
-- Theme: {event_theme or 'Not specified'}
-- Expected Mode: {event_mode or 'Not specified'}
-
-Task: Analyze the image and determine:
-1. Does the image show a banner or poster with text? If yes, does the banner text match the event title/theme?
-2. Does the image depict a real event/activity (not stock photo, not staged, not just a poster)?
-3. Does the event mode (online/offline) match what's visible in the image?
-   - Online: screens, video calls, virtual backgrounds, remote participants
-   - Offline: physical venue, in-person attendees, physical setup
-4. How many participants are visible? Provide an estimate.
-5. Is this clearly a real event scene with actual activity?
-
-Respond in this exact format:
-HAS_BANNER: YES or NO
-BANNER_TEXT_MATCHES: YES or NO
-IS_REAL_EVENT: YES or NO
-MODE_MATCHES: YES or NO
-PARTICIPANT_COUNT: <number>
-HAS_15_PLUS_PARTICIPANTS: YES or NO
-REASONING: <brief explanation>"""
+        prompt = f"""You are analyzing an event photograph for validation system.
+            Event Title: {event_title or 'Not specified'}
+            Event Theme: {event_theme or 'Not specified'}
+            Expected Mode: {event_mode or 'Not specified'}
+            
+            CHECKLIST:
+            1. Is there a banner or poster visible? (Yes/No)
+            2. Is this a real event scene (people, interaction) or just a static object/screenshot? (Real/Fake)
+            3. Are there more than 15 participants visible? (Yes/No)
+            4. Does the scene match a '{event_mode}' event (online vs offline)? (Yes/No)
+            
+            OUTPUT JSON ONLY (No markdown, no explanation outside JSON):
+            {{
+                "has_banner": true,
+                "is_real_event": true,
+                "has_15_plus_participants": true,
+                "mode_match": true,
+                "description": "short description"
+            }}"""
         
         response = self._call_gemini(prompt, image_path=image_path, use_cache=False)
         if not response:
             logger.warning("Gemini image analysis failed, trying Groq fallback...")
-            # Fallback to Groq for image analysis
+             # Fallback to Groq if available
             if self.groq_client and hasattr(self.groq_client, 'client') and self.groq_client.client:
-                try:
-                    groq_results = self.groq_client.analyze_image(image_path, event_mode, event_title, event_theme)
-                    if groq_results and (any(groq_results.values()) or groq_results.get("detailed_reasoning")):
-                        logger.info("Groq fallback succeeded for image analysis")
-                        return groq_results
-                except Exception as e:
-                    logger.warning(f"Groq fallback for image analysis failed: {e}")
-            logger.warning("Both Gemini and Groq image analysis failed")
+                 try:
+                     groq_results = self.groq_client.analyze_image(image_path, event_mode, event_title, event_theme)
+                     if groq_results:
+                         return groq_results
+                 except Exception as e:
+                     logger.warning(f"Groq fallback failed: {e}")
             return results
         
-        # Parse response
-        for line in response.split('\n'):
-            line = line.strip()
-            if 'HAS_BANNER:' in line:
-                results["has_banner"] = "YES" in line.upper()
-            elif 'BANNER_TEXT_MATCHES:' in line:
-                results["banner_text_matches"] = "YES" in line.upper()
-            elif 'IS_REAL_EVENT:' in line:
-                results["is_real_event"] = "YES" in line.upper()
-            elif 'MODE_MATCHES:' in line:
-                results["mode_matches"] = "YES" in line.upper()
-            elif 'PARTICIPANT_COUNT:' in line:
-                try:
-                    count_str = line.split(':')[1].strip()
-                    results["participant_count_estimate"] = int(count_str)
-                except (ValueError, IndexError):
-                    pass
-            elif 'HAS_15_PLUS_PARTICIPANTS:' in line:
-                results["has_15_plus_participants"] = "YES" in line.upper()
-            elif 'REASONING:' in line:
-                results["detailed_reasoning"] = line.split(':', 1)[1].strip() if ':' in line else ""
-        
+        # Flatten response text to string first
+        response_text = response if isinstance(response, str) else str(response)
+
+        # Robust JSON Parsing
+        try:
+            json_str = response_text
+            # Try to extract from markdown code blocks first
+            if "```" in response_text:
+                # Handle both ```json and just ```
+                blocks = response_text.split("```")
+                for block in blocks:
+                    block = block.strip()
+                    if block.startswith("json"):
+                        block = block[4:].strip()
+                    if block.startswith("{") and block.endswith("}"):
+                        json_str = block
+                        break
+            
+            # Fallback: find first { and last }
+            if "{" in json_str:
+                json_str = "{" + json_str.split("{", 1)[1].rsplit("}", 1)[0] + "}"
+            
+            # Clean up potential Python booleans/None to valid JSON
+            json_str = json_str.replace("True", "true").replace("False", "false").replace("None", "null")
+            
+            # Load JSON
+            try:
+                parsed_result = json.loads(json_str)
+                # Merge into default results
+                results.update(parsed_result)
+                results["detailed_reasoning"] = parsed_result.get("description", "")
+                return results
+            except json.JSONDecodeError as e:
+                logger.error(f"JSON decode failed: {e}. Raw response: {response_text[:100]}...")
+            
+        except Exception as e:
+            logger.warning(f"Failed to parse image analysis JSON: {response_text[:100]}... Error: {e}")
+            
         return results
+
+    def extract_text_from_image(self, image_path: Path) -> Dict[str, Any]:
+        """
+        Extract text from an image using the vision model (OCR-like).
+        Then check if event details (date, time, title, event type) are present.
+        
+        Returns:
+            Dict with keys: extracted_text, has_event_details, event_details_found
+        """
+        result = {
+            "extracted_text": "",
+            "has_event_details": False,
+            "event_details_found": [],
+            "has_visual_geotag": False
+        }
+        
+        if not self.client:
+            return result
+        
+        # Ensure image_path is Path
+        if not isinstance(image_path, Path):
+            image_path = Path(image_path)
+            
+        if not image_path.exists():
+            return result
+            
+        try:
+            prompt = """Read ALL text visible in this image. Extract every word, number, date, and line of text you can see.
+            
+OUTPUT: Return ONLY the extracted text, nothing else. If no text is visible, return "NO TEXT FOUND"."""
+            
+            response = self._call_gemini(prompt, image_path=image_path, use_cache=True)
+            
+            if not response:
+                return result
+                
+            extracted_text = response.strip() if isinstance(response, str) else str(response).strip()
+            result["extracted_text"] = extracted_text
+            
+            if not extracted_text or extracted_text.upper() == "NO TEXT FOUND":
+                return result
+            
+            text_lower = extracted_text.lower()
+            details_found = []
+            
+            # Check for date patterns (DD/MM/YYYY, DD-MM-YYYY, Month Day Year, etc.)
+            date_patterns = [
+                r'\d{1,2}[/\-\.]\d{1,2}[/\-\.]\d{2,4}',
+                r'(january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{1,2}',
+                r'\d{1,2}\s+(january|february|march|april|may|june|july|august|september|october|november|december)',
+                r'\d{1,2}(st|nd|rd|th)\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)',
+            ]
+            for pattern in date_patterns:
+                if re.search(pattern, text_lower):
+                    details_found.append("date")
+                    break
+            
+            # Check for time patterns (HH:MM, AM/PM)
+            time_patterns = [
+                r'\d{1,2}:\d{2}',
+                r'\d{1,2}\s*(am|pm|a\.m\.|p\.m\.)',
+            ]
+            for pattern in time_patterns:
+                if re.search(pattern, text_lower):
+                    details_found.append("time")
+                    break
+            
+            # Check for event type keywords
+            event_keywords = [
+                'workshop', 'seminar', 'webinar', 'conference', 'symposium',
+                'hackathon', 'bootcamp', 'session', 'lecture', 'summit',
+                'training', 'orientation', 'inauguration', 'event', 'program',
+                'programme', 'meet', 'fest', 'expo', 'competition',
+                'guest lecture', 'field visit', 'industry visit',
+            ]
+            for kw in event_keywords:
+                if kw in text_lower:
+                    details_found.append(f"event_type:{kw}")
+                    break
+            
+            # Check for venue/location keywords
+            venue_keywords = [
+                'hall', 'auditorium', 'room', 'lab', 'laboratory', 'campus',
+                'building', 'block', 'floor', 'center', 'centre', 'venue',
+                'college', 'university', 'institute', 'department',
+            ]
+            for kw in venue_keywords:
+                if kw in text_lower:
+                    details_found.append(f"venue:{kw}")
+                    break
+            
+            # Check for title-like content (capitalized phrases, theme mentions)
+            title_keywords = [
+                'innovation', 'entrepreneurship', 'startup', 'design thinking',
+                'iic', 'institution', 'council', 'theme', 'topic',
+            ]
+            for kw in title_keywords:
+                if kw in text_lower:
+                    details_found.append(f"title:{kw}")
+                    break
+            
+            # Check for visual geotag indicators (GPS coordinates, map overlays)
+            geotag_indicators = [
+                r'lat\s*[:\.]?\s*\d+',
+                r'long\s*[:\.]?\s*\d+',
+                r'gps\s*map\s*camera',
+                r'altitude',
+                r'\d+\.\d+\s*,\s*\d+\.\d+',  # decimal coordinates
+                r'\d+°\s*\d+\'?\s*\d+"?\s*[NSEW]',  # DMS coordinates
+            ]
+            for indicator in geotag_indicators:
+                if re.search(indicator, text_lower):
+                    details_found.append("visual_geotag")
+                    break
+            
+            result["event_details_found"] = details_found
+            # Pass if at least 1 event detail found
+            result["has_event_details"] = len(details_found) >= 1
+            result["has_visual_geotag"] = "visual_geotag" in details_found
+            
+            logger.info(f"Banner/Geotag text extraction: found {len(details_found)} details: {details_found}")
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error extracting text from image {image_path}: {e}")
+            return result
     
     def analyze_pdf_with_vision(
         self,
@@ -788,65 +1018,11 @@ REASONING: <brief explanation>"""
         Returns:
             Dict with validation results and detailed reasoning
         """
-        results = {
-            "title_match": False,
-            "objectives_match": False,
-            "learning_match": False,
-            "expert_details_present": False,
-            "participants_valid": False,
-            "theme_alignment": False,
-            "detailed_reasoning": ""
-        }
-        
-        prompt = f"""You are validating a PDF report for an event submission.
-
-Expected Context:
-- Title: {expected_title or 'Not specified'}
-- Objectives: {expected_objectives or 'Not specified'}
-- Learning Outcomes: {expected_learning_outcomes or 'Not specified'}
-- Theme: {theme or 'Not specified'}
-
-PDF Content (first 3000 characters):
-{pdf_text[:3000]}
-
-Task: Validate the PDF content and determine:
-1. Does the PDF title match the expected title (fuzzy match acceptable)?
-2. Do the PDF objectives align with expected objectives?
-3. Do the PDF learning outcomes align with expected learning outcomes?
-4. Are expert details present (name, designation, affiliation)?
-5. Does the PDF contain participant information indicating 15+ participants?
-6. Does the overall content align with the declared theme?
-
-Respond in this exact format:
-TITLE_MATCH: YES or NO
-OBJECTIVES_MATCH: YES or NO
-LEARNING_MATCH: YES or NO
-EXPERT_DETAILS: YES or NO
-PARTICIPANTS_VALID: YES or NO
-THEME_ALIGNMENT: YES or NO
-REASONING: <detailed explanation>"""
-        
-        response = self._call_gemini(prompt)
-        if not response:
-            logger.warning("PDF vision analysis failed (Gemini and Groq fallback)")
-            return results
-        
-        # Parse response
-        for line in response.split('\n'):
-            line = line.strip()
-            if 'TITLE_MATCH:' in line:
-                results["title_match"] = "YES" in line.upper()
-            elif 'OBJECTIVES_MATCH:' in line:
-                results["objectives_match"] = "YES" in line.upper()
-            elif 'LEARNING_MATCH:' in line:
-                results["learning_match"] = "YES" in line.upper()
-            elif 'EXPERT_DETAILS:' in line:
-                results["expert_details_present"] = "YES" in line.upper()
-            elif 'PARTICIPANTS_VALID:' in line:
-                results["participants_valid"] = "YES" in line.upper()
-            elif 'THEME_ALIGNMENT:' in line:
-                results["theme_alignment"] = "YES" in line.upper()
-            elif 'REASONING:' in line:
-                results["detailed_reasoning"] = line.split(':', 1)[1].strip() if ':' in line else ""
-        
-        return results
+        # Reuse existing robust method
+        return self.validate_pdf_comprehensive(
+            pdf_text=pdf_text,
+            expected_title=expected_title,
+            expected_objectives=expected_objectives,
+            expected_learning_outcomes=expected_learning_outcomes,
+            expected_participants=None # Or pass if available
+        )

@@ -393,10 +393,6 @@ def process_submission(
         pdf_points = sum(r.points_awarded for r in pdf_results)
         pdf_passed = sum(1 for r in pdf_results if r.passed)
         pdf_total = len(pdf_results)
-        # Log PDF validation results
-        pdf_points = sum(r.points_awarded for r in pdf_results)
-        pdf_passed = sum(1 for r in pdf_results if r.passed)
-        pdf_total = len(pdf_results)
         logger.info(f"PDF Validation Summary: {pdf_passed}/{pdf_total} passed | Points: {pdf_points}/20")
         for result in pdf_results:
             status = "✓ PASS" if result.passed else "✗ FAIL"

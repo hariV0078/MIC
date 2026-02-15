@@ -28,11 +28,13 @@ def validate_geotag_present(
             message="No images provided"
         )
     
-    # Check if any image has geotag
+    # Check if any image has EXIF geotag
     has_geotag = any(img.has_geotag for img in submission.images)
     logger.debug(f"  Images checked: {len(submission.images)}, Geotag found: {has_geotag}")
     
     # If metadata check failed, try visual geotag check using OCR text
+    # NOTE: The caller (validate_images) is responsible for providing the 'text_analysis'
+    # which should correspond to an image that HAS the visual geotag if one exists.
     if not has_geotag and text_analysis and text_analysis.get("has_visual_geotag", False):
         logger.info(f"  PASS: Visual geotag/overlay detected in image | Points: {points}")
         return ValidationResult(
@@ -70,13 +72,7 @@ def validate_banner_poster_visible(
     analysis: Optional[dict] = None,
     text_analysis: Optional[dict] = None
 ) -> ValidationResult:
-    """Check if banner/poster is visible in images.
-    
-    Uses two methods:
-    1. Vision model banner detection (has_banner)
-    2. Text extraction from image - checks for event details (date, time, event type, etc.)
-    Passes if EITHER method succeeds.
-    """
+    """Check if banner/poster is visible in images."""
     rule_name, points = IMAGE_RULES[1]
     
     if not submission.images:
@@ -145,7 +141,6 @@ def validate_real_activity_scene(
             message="Image analysis not provided"
         )
     
-    # Pass if real event detected OR 15+ participants visible (participants imply real event)
     if analysis.get("is_real_event", False) or analysis.get("has_15_plus_participants", False):
         return ValidationResult(
             criterion=rule_name,
@@ -160,9 +155,6 @@ def validate_real_activity_scene(
             points_awarded=0,
             message="Image does not depict a real event activity"
         )
-
-
-
 
 
 def validate_15_plus_participants_visible(
@@ -208,30 +200,62 @@ def validate_images(submission: EventSubmission, ollama_client: OllamaClient) ->
     """Run all image validations."""
     results = []
     
-    # Geotag validation is ENABLED
-    # Geotag validation will be run after text extraction
-    
     if not submission.images:
-        # Return failed results for all validations if no images
         results.append(validate_geotag_present(submission))
         results.append(validate_banner_poster_visible(submission, None))
         results.append(validate_real_activity_scene(submission, None))
         results.append(validate_15_plus_participants_visible(submission, None))
         return results
     
-    # OPTIMIZATION: Call analyze_image() ONCE and reuse results for all validations
-    # This reduces 4 API calls to 1 API call per image (4x faster!)
+    # 1. GEOTAG LOOP: Check ALL images for geotag if needed
+    # First check EXIF (fastest)
+    has_exif_geotag = any(img.has_geotag for img in submission.images)
+    
+    final_text_analysis = {}
+    
+    # Loop for visual geotag only if EXIF is missing
+    if not has_exif_geotag:
+        logger.info("No EXIF geotag found. Scanning first 3 images for visual geotag...")
+        # OPTIMIZATION: Limit scan to first 3 images to avoid timeout on large submissions
+        for i, img in enumerate(submission.images[:3]):
+            img_path = img.path
+            if not isinstance(img_path, Path):
+                img_path = Path(img_path)
+                
+            logger.info(f"Scanning image {i+1}/{min(len(submission.images), 3)} for text: {img_path.name}")
+            text_result = ollama_client.extract_text_from_image(str(img_path))
+            
+            # If we find a visual geotag, stop and use this result
+            if text_result.get("has_visual_geotag", False):
+                logger.info(f"Visual geotag found in image {i+1}!")
+                final_text_analysis = text_result
+                break
+            
+            # Keep the result of the first image as fallback/default if nothing better found
+            if i == 0:
+                final_text_analysis = text_result
+    else:
+        # If EXIF found, we still need text analysis for banner/poster check
+        # Just use the first image for efficiency
+        logger.info("EXIF geotag found. Using first image for text analysis.")
+        img_path = submission.images[0].path
+        if not isinstance(img_path, Path):
+            img_path = Path(img_path)
+        final_text_analysis = ollama_client.extract_text_from_image(str(img_path))
+    
+    # 2. IMAGE ANALYSIS: Use First Image (or best image?)
+    # For now, we stick to the first image for semantic analysis (scene, people)
+    # assuming that the first image is the most representative.
     image_path = submission.images[0].path
     if not isinstance(image_path, Path):
         image_path = Path(image_path)
     
-    # Get event context for better analysis
     row_data = submission.row_data
     event_title = row_data.get('Title', '') or row_data.get('activity_name', '')
     event_theme = row_data.get('Theme', '')
     event_mode = str(row_data.get('Event Mode', '')).strip().lower()
     
-    logger.info(f"Analyzing image once for all validations: {image_path.name}")
+    logger.info(f"Analyzing primary image: {image_path.name}")
     analysis = ollama_client.analyze_image(
         image_path=image_path,
         event_mode=event_mode,
@@ -239,20 +263,14 @@ def validate_images(submission: EventSubmission, ollama_client: OllamaClient) ->
         event_theme=event_theme
     )
     
-    # Reuse the same analysis result for all validation functions
-    # Extract text from image for banner and geotag checks
-    logger.info(f"Extracting text from image for validations: {image_path.name}")
-    text_analysis = ollama_client.extract_text_from_image(str(image_path))
-    
-    # Run validations
-    results.append(validate_geotag_present(submission, text_analysis))
+    # Run validations with gathered data
+    results.append(validate_geotag_present(submission, final_text_analysis))
     
     results.append(validate_banner_poster_visible(
         submission, analysis,
-        text_analysis=text_analysis
+        text_analysis=final_text_analysis
     ))
     results.append(validate_real_activity_scene(submission, analysis))
     results.append(validate_15_plus_participants_visible(submission, analysis))
     
     return results
-
