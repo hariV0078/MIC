@@ -896,16 +896,36 @@ REASONING: <brief explanation of your findings>"""
             return result
             
         try:
-            prompt = """Read ALL text visible in this image. Extract every word, number, date, and line of text you can see.
-            
-OUTPUT: Return ONLY the extracted text, nothing else. If no text is visible, return "NO TEXT FOUND"."""
-            
-            response = self._call_gemini(prompt, image_path=image_path, use_cache=True)
-            
-            if not response:
-                return result
+            # OPTIMIZATION: Use EasyOCR (Method 1) of Vision Model
+            # This is faster and more accurate for "GPS Map Camera" overlays
+            try:
+                from event_validator.utils.ocr import extract_visual_geotag
+                has_ocr_geotag, ocr_text = extract_visual_geotag(str(image_path))
                 
-            extracted_text = response.strip() if isinstance(response, str) else str(response).strip()
+                if ocr_text and len(ocr_text.strip()) > 5:
+                    extracted_text = ocr_text
+                    logger.info(f"Using EasyOCR text for {Path(image_path).name} (Length: {len(extracted_text)})")
+                    if has_ocr_geotag:
+                        logger.info("EasyOCR detected visual geotag keywords.")
+                else:
+                    extracted_text = ""
+            except Exception as e:
+                 logger.warning(f"EasyOCR logic failed: {e}")
+                 extracted_text = ""
+
+            # Standard Gemini/Groq Fallback if EasyOCR yields nothing
+            if not extracted_text:
+                prompt = """Read ALL text visible in this image. Extract every word, number, date, and line of text you can see.
+                
+                OUTPUT: Return ONLY the extracted text, nothing else. If no text is visible, return "NO TEXT FOUND"."""
+                
+                response = self._call_gemini(prompt, image_path=image_path, use_cache=True)
+                
+                if not response:
+                    return result
+                    
+                extracted_text = response.strip() if isinstance(response, str) else str(response).strip()
+
             result["extracted_text"] = extracted_text
             
             if not extracted_text or extracted_text.upper() == "NO TEXT FOUND":

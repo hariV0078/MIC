@@ -28,7 +28,8 @@ python-dotenv>=1.0.0
 thefuzz>=0.22.1
 python-Levenshtein>=0.25.0
 
-# Optional: OCR support (uncomment if needed)
+# OCR support (EasyOCR for robust visual geotags)
+easyocr>=1.7.0
 # pdf2image>=1.16.0
 # pytesseract>=0.3.10
 

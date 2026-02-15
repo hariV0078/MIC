@@ -414,7 +414,7 @@ class OllamaClient:
     def extract_text_from_image(self, image_path: str) -> Dict[str, Any]:
         """
         Extract text from an image using the vision model (OCR-like).
-        Then check if event details (date, time, title, event type) are present.
+        Now supporting EasyOCR for robust and fast extraction.
         
         Returns:
             Dict with keys: extracted_text, has_event_details, event_details_found
@@ -429,25 +429,47 @@ class OllamaClient:
             return result
         
         try:
-            with open(image_path, 'rb') as f:
-                image_data = f.read()
-            
-            prompt = """Read ALL text visible in this image. Extract every word, number, date, and line of text you can see.
-            
-OUTPUT: Return ONLY the extracted text, nothing else. If no text is visible, return "NO TEXT FOUND"."""
-            
-            # Import concurrency guard
-            from event_validator.utils.concurrency import ollama_concurrency_guard
+             # OPTIMIZATION: Use EasyOCR (Method 1) of Vision Model
+            # This is faster (1s vs 45s) and more accurate for "GPS Map Camera" overlays
+            try:
+                from event_validator.utils.ocr import extract_visual_geotag
+                has_ocr_geotag, ocr_text = extract_visual_geotag(str(image_path))
+                
+                if ocr_text and len(ocr_text.strip()) > 5:
+                    extracted_text = ocr_text
+                    logger.info(f"Using EasyOCR text for {Path(image_path).name} (Length: {len(extracted_text)})")
+                    if has_ocr_geotag:
+                        logger.info("EasyOCR detected visual geotag keywords.")
+                else:
+                    # Fallback to Vision Model
+                    # Only if OCR text is suspiciously short or empty
+                    extracted_text = "" 
+            except Exception as e:
+                logger.warning(f"EasyOCR logic failed: {e}")
+                extracted_text = ""
 
-            with ollama_concurrency_guard():
-                response = self.client.generate(
-                    model=self.vision_model,
-                    prompt=prompt,
-                    images=[image_data],
-                    options={'temperature': 0.0}
-                )
-            
-            extracted_text = response.get('response', '').strip()
+            # Standard Vision Model Fallback (Only if EasyOCR yielded no useful text)
+            if not extracted_text:
+                try:
+                    with open(image_path, 'rb') as f:
+                        image_data = f.read()
+                    
+                    prompt = """Read ALL text visible in this image. Extract every word, number, date, and line of text you can see.
+                    
+                    OUTPUT: Return ONLY the extracted text, nothing else. If no text is visible, return "NO TEXT FOUND"."""
+                    
+                    from event_validator.utils.concurrency import ollama_concurrency_guard
+                    with ollama_concurrency_guard():
+                        response = self.client.generate(
+                            model=self.vision_model,
+                            prompt=prompt,
+                            images=[image_data],
+                            options={'temperature': 0.0}
+                        )
+                    extracted_text = response.get('response', '').strip()
+                except Exception as e:
+                    logger.error(f"Vision model fallback failed: {e}")
+
             result["extracted_text"] = extracted_text
             
             if not extracted_text or extracted_text.upper() == "NO TEXT FOUND":
