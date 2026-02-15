@@ -357,13 +357,17 @@ class OllamaClient:
             }}
             """
             
+            # Import concurrency guard
+            from event_validator.utils.concurrency import ollama_concurrency_guard
+            
             # Ollama expects images as list of bytes or base64 strings
-            response = self.client.generate(
-                model=self.vision_model,
-                prompt=prompt,
-                images=[image_data],
-                options={'temperature': 0.0, 'format': 'json'}  # Try forcing JSON mode if supported
-            )
+            with ollama_concurrency_guard():
+                response = self.client.generate(
+                    model=self.vision_model,
+                    prompt=prompt,
+                    images=[image_data],
+                    options={'temperature': 0.0, 'format': 'json'}  # Try forcing JSON mode if supported
+                )
 
             response_text = response.get('response', '').strip()
             
@@ -432,12 +436,16 @@ class OllamaClient:
             
 OUTPUT: Return ONLY the extracted text, nothing else. If no text is visible, return "NO TEXT FOUND"."""
             
-            response = self.client.generate(
-                model=self.vision_model,
-                prompt=prompt,
-                images=[image_data],
-                options={'temperature': 0.0}
-            )
+            # Import concurrency guard
+            from event_validator.utils.concurrency import ollama_concurrency_guard
+
+            with ollama_concurrency_guard():
+                response = self.client.generate(
+                    model=self.vision_model,
+                    prompt=prompt,
+                    images=[image_data],
+                    options={'temperature': 0.0}
+                )
             
             extracted_text = response.get('response', '').strip()
             result["extracted_text"] = extracted_text

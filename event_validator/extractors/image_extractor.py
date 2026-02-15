@@ -29,15 +29,14 @@ def extract_image_metadata(image_path: Path) -> ImageData:
         try:
             img = Image.open(image_path)
             
-            # OPTIMIZATION: Smart Resize
-            # Resize if significantly larger than needed (e.g. > 1920px)
-            # 1920px is sufficient for Gemini Vision but faster to upload
-            max_dimension = 1920
+            # OPTIMIZATION: Aggressive Resize for Speed (Gemini/Bandwidth)
+            # 1024px is sufficient for Gemini Vision and much faster to upload/process
+            max_dimension = 1024
             if max(img.size) > max_dimension:
                 # Calculate new size preserving aspect ratio
                 ratio = max_dimension / max(img.size)
                 new_size = (int(img.width * ratio), int(img.height * ratio))
-                logger.debug(f"  Resizing image {image_path.name} from {img.size} to {new_size} for optimization")
+                logger.debug(f"  Resizing image {image_path.name} from {img.size} to {new_size} for speed optimization")
                 
                 # EXTRACT EXIF BEFORE SAVING/RESIZING to allow metadata preservation
                 exif = img._getexif()
@@ -57,7 +56,7 @@ def extract_image_metadata(image_path: Path) -> ImageData:
                 img_resized = img.resize(new_size, Image.Resampling.LANCZOS)
                 
                 # Overwrite file with optimized version
-                img_resized.save(image_path, quality=95, optimize=True)
+                img_resized.save(image_path, quality=90, optimize=True)
                 
                 # Re-open for any subsequent processing if needed
                 img = img_resized

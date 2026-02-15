@@ -29,23 +29,14 @@ def extract_image_metadata(image_path: Path) -> ImageData:
         try:
             img = Image.open(image_path)
             
-            # OPTIMIZATION: Smart Resize
-            # Resize if significantly larger than needed for OCR (e.g. > 1920px)
-            # 1920px is sufficient for "Lat/Long" text but much faster than 4K (12MP+)
-            max_dimension = 1920
+            # OPTIMIZATION: Aggressive Resize for Speed (Moondream/Edge Models)
+            # 1024px is optimal for moondream/llava-Next and significantly faster than 1920px/4K
+            max_dimension = 1024
             if max(img.size) > max_dimension:
                 # Calculate new size preserving aspect ratio
                 ratio = max_dimension / max(img.size)
                 new_size = (int(img.width * ratio), int(img.height * ratio))
-                logger.debug(f"  Resizing image {image_path.name} from {img.size} to {new_size} for optimization")
-                
-                # Use LANCZOS for best quality downsampling
-                img_resized = img.resize(new_size, Image.Resampling.LANCZOS)
-                
-                # Overwrite file with optimized version
-                # Note: We do this AFTER opening, so we might lose some non-standard metadata
-                # but EXIF is usually preserved if we save correctly, or we extract it first.
-                # ideally we should extract EXIF *before* resizing/saving.
+                logger.debug(f"  Resizing image {image_path.name} from {img.size} to {new_size} for speed optimization")
                 
                 # EXTRACT EXIF BEFORE SAVING/RESIZING to allow metadata preservation
                 # (This fixes the original data loss bug)
@@ -62,8 +53,15 @@ def extract_image_metadata(image_path: Path) -> ImageData:
                                 gps_info[gps_tag] = gps_value
                             exif_data['GPSDetails'] = gps_info
                 
+                # Use LANCZOS for best quality downsampling
+                img_resized = img.resize(new_size, Image.Resampling.LANCZOS)
+                
+                # Overwrite file with optimized version
+                # Note: We do this AFTER opening, so we might lose some non-standard metadata
+                # but EXIF is usually preserved if we save correctly, or we extract it first.
+                
                 # Now save resized image
-                img_resized.save(image_path, quality=95, optimize=True)
+                img_resized.save(image_path, quality=90, optimize=True)
                 
                 # Re-open for any subsequent processing if needed (or just use img_resized)
                 img = img_resized
