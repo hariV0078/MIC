@@ -1,6 +1,7 @@
 """Ollama API client for semantic validation with vision support - Open Source LLM."""
 import logging
 from typing import Optional, Dict, Any
+from pathlib import Path
 import os
 import time
 import hashlib
