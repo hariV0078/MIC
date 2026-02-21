@@ -224,29 +224,39 @@ def extract_pdf_text(file_path: Path) -> Optional[PDFData]:
     method = "none"
 
     # --- Layer 1: pypdf ---
-    logger.debug(f"PDF Layer 1 (pypdf): {file_path.name}")
+    print(f"🔎 [DEBUG] Layer 1 (pypdf) starting for: {file_path.name}")
     text, metadata = _extract_with_pypdf(file_path)
     if text.strip():
+        print(f"✅ [DEBUG] Layer 1 (pypdf) SUCCESS: Extracted {len(text)} chars")
         method = "pypdf"
 
     # --- Layer 2: pdfplumber ---
     if not text.strip():
-        logger.debug(f"PDF Layer 2 (pdfplumber): {file_path.name}")
+        print(f"🔎 [DEBUG] Layer 2 (pdfplumber) starting for: {file_path.name}")
         text, meta2 = _extract_with_pdfplumber(file_path)
         if text.strip():
+            print(f"✅ [DEBUG] Layer 2 (pdfplumber) SUCCESS: Extracted {len(text)} chars")
             method = "pdfplumber"
         if not metadata and meta2:
             metadata = meta2
 
     # --- Layer 3: EasyOCR ---
     if not text.strip():
+        print(f"🔎 [DEBUG] Layer 3 (EasyOCR) target check: DISABLE_PDF_OCR={os.environ.get('DISABLE_PDF_OCR')}")
         if os.environ.get("DISABLE_PDF_OCR") == "1":
             logger.info(f"Skipping OCR layer for {file_path.name} (DISABLE_PDF_OCR=1)")
         else:
             logger.info(f"PDF Layer 3 (EasyOCR): {file_path.name} — text PDFs failed, trying OCR")
             text = _extract_with_easyocr(file_path)
+            if text.strip():
+                print(f"✅ [DEBUG] Layer 3 (EasyOCR) SUCCESS: Extracted {len(text)} chars")
         if text.strip():
             method = "easyocr"
+    else:
+        print(f"⏭️ [DEBUG] Skipping Layer 3 (OCR) because text is already present.")
+
+    if not text.strip():
+        print(f"❌ [DEBUG] ALL PDF EXTRACTION LAYERS FAILED for: {file_path.name}")
 
     # Get page count (best-effort)
     num_pages = 0
