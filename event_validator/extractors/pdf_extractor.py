@@ -1,210 +1,252 @@
-"""PDF text extraction with OCR fallback."""
+"""PDF text extraction with multi-layer fallback: pdfplumber → PyPDF2 → EasyOCR."""
 import logging
+import os
 from pathlib import Path
 from typing import Optional, Dict, Any
 
+logger = logging.getLogger(__name__)
+
+# --- Dependency imports (all optional, graceful fallback) ---
+
 try:
     import PyPDF2
+    PYPDF2_AVAILABLE = True
 except ImportError:
     PyPDF2 = None
+    PYPDF2_AVAILABLE = False
 
 try:
     import pdfplumber
+    PDFPLUMBER_AVAILABLE = True
 except ImportError:
     pdfplumber = None
-
-try:
-    import pytesseract
-    from PIL import Image as PILImage
-except ImportError:
-    pytesseract = None
-    PILImage = None
+    PDFPLUMBER_AVAILABLE = False
 
 try:
     from pdf2image import convert_from_path
+    import shutil
+    import numpy as np
     PDF2IMAGE_AVAILABLE = True
 except ImportError:
+    convert_from_path = None
     PDF2IMAGE_AVAILABLE = False
 
 from event_validator.types import PDFData
 
-logger = logging.getLogger(__name__)
+
+# ─────────────────────────────────────────────────────────────
+# Layer 1: pdfplumber (handles tables + complex layouts)
+# ─────────────────────────────────────────────────────────────
+def _extract_with_pdfplumber(pdf_path: Path) -> tuple[str, dict]:
+    """Layer 1: pdfplumber — better layout/table handling."""
+    if not PDFPLUMBER_AVAILABLE:
+        return "", {}
+    try:
+        parts = []
+        metadata = {}
+        with pdfplumber.open(pdf_path) as pdf:
+            try:
+                metadata = pdf.metadata or {}
+            except Exception:
+                pass
+            for i, page in enumerate(pdf.pages, 1):
+                try:
+                    page_text = page.extract_text()
+                    if page_text and page_text.strip():
+                        parts.append(page_text.strip())
+                        continue
+                    # Fallback: try table extraction within page
+                    tables = page.extract_tables()
+                    if tables:
+                        for table in tables:
+                            for row in table:
+                                if row:
+                                    row_text = " ".join(str(c) for c in row if c)
+                                    if row_text.strip():
+                                        parts.append(row_text.strip())
+                    # Try layout-preserved extraction
+                    try:
+                        layout_text = page.extract_text(layout=True)
+                        if layout_text and layout_text.strip():
+                            parts.append(layout_text.strip())
+                    except Exception:
+                        pass
+                except Exception as e:
+                    logger.debug(f"pdfplumber page {i} error: {e}")
+                    continue
+        return "\n".join(parts), metadata
+    except Exception as e:
+        logger.debug(f"pdfplumber failed for {pdf_path.name}: {e}")
+        return "", {}
 
 
-def extract_pdf_text(pdf_path: Path) -> PDFData:
+# ─────────────────────────────────────────────────────────────
+# Layer 2: PyPDF2
+# ─────────────────────────────────────────────────────────────
+def _extract_with_pypdf2(pdf_path: Path) -> tuple[str, dict]:
+    """Layer 2: PyPDF2 — standard text extraction."""
+    if not PYPDF2_AVAILABLE:
+        return "", {}
+    try:
+        parts = []
+        metadata = {}
+        with open(pdf_path, 'rb') as f:
+            reader = PyPDF2.PdfReader(f)
+            try:
+                if reader.metadata:
+                    metadata = {k: str(v) for k, v in reader.metadata.items() if k and v}
+            except Exception:
+                pass
+            for i, page in enumerate(reader.pages, 1):
+                try:
+                    page_text = page.extract_text()
+                    if page_text and page_text.strip():
+                        parts.append(page_text.strip())
+                except Exception as e:
+                    logger.debug(f"PyPDF2 page {i} error: {e}")
+                    continue
+        return "\n".join(parts), metadata
+    except Exception as e:
+        logger.debug(f"PyPDF2 failed for {pdf_path.name}: {e}")
+        return "", {}
+
+
+# ─────────────────────────────────────────────────────────────
+# Layer 3: EasyOCR on PDF pages (scanned / image-only PDFs)
+# ─────────────────────────────────────────────────────────────
+def _extract_with_easyocr(pdf_path: Path) -> str:
+    """Layer 3: Convert PDF to image, then EasyOCR using hardcoded Poppler path."""
+    
+    # Try several common locations for Poppler binaries
+    POPPLER_DIR = r"C:\tools\poppler\Library\bin"
+    
+    if not os.path.exists(POPPLER_DIR):
+        POPPLER_DIR = r"C:\ProgramData\chocolatey\lib\poppler\tools\poppler-26.02.0\Library\bin"
+    
+    if not os.path.exists(POPPLER_DIR):
+        POPPLER_DIR = r"C:\ProgramData\chocolatey\lib\poppler\tools\poppler-26.02.0\bin"
+
+    if not os.path.exists(POPPLER_DIR):
+        # Last resort: try checking if it's already in PATH via shutil.which
+        import shutil
+        found = shutil.which("pdftocairo")
+        if found:
+            POPPLER_DIR = os.path.dirname(found)
+
+    print(f"\n🔄 Running OCR Fallback on {pdf_path.name}...")
+    if os.path.exists(POPPLER_DIR):
+        print(f"    [Poppler] Using binaries from: {POPPLER_DIR}")
+    else:
+        print(f"    [Poppler] WARNING: No Poppler path found. Falling back to system PATH.")
+    
+    try:
+        from event_validator.utils.ocr import get_reader
+        reader = get_reader()
+        if not reader: 
+            return ""
+
+        # Convert PDF to images using the explicit Poppler path
+        # If POPPLER_DIR doesn't exist, convert_from_path will fall back to PATH
+        images = convert_from_path(
+            str(pdf_path), 
+            dpi=200, 
+            poppler_path=POPPLER_DIR if os.path.exists(POPPLER_DIR) else None
+        )
+        
+        parts = []
+        for img in images:
+            img_array = np.array(img)
+            result = reader.readtext(img_array, detail=0)
+            page_text = " ".join(result).strip()
+            if page_text:
+                parts.append(page_text)
+                
+        return "\n".join(parts)
+
+    except Exception as e:
+        print(f"\n🚨 OCR CRASHED ON {pdf_path.name}:\n{str(e)}\n")
+        return ""
+
+
+# ─────────────────────────────────────────────────────────────
+# Public API
+# ─────────────────────────────────────────────────────────────
+def _infer_title(metadata: dict, text: str) -> Optional[str]:
+    """Try to infer a title from metadata or first lines of text."""
+    title = (
+        metadata.get('/Title') or metadata.get('Title') or
+        metadata.get('title') or metadata.get('Subject') or
+        metadata.get('/Subject')
+    )
+    if title:
+        title = str(title).strip()
+        if title and title.lower() != 'none':
+            return title
+    # Fallback: use first meaningful line
+    if text:
+        for line in text.split('\n')[:8]:
+            line = line.strip()
+            words = line.split()
+            if 3 <= len(words) <= 20 and len(line) > 5:
+                return line
+    return None
+
+
+def extract_pdf_text(pdf_path: Path) -> 'PDFData':
     """
-    Extract text from PDF using multiple methods with improved error handling.
-    Falls back to OCR if text extraction fails.
+    Extract text from a PDF using a 3-layer cascade:
+      1. pdfplumber   — best for text + tables
+      2. PyPDF2       — standard text layer extraction
+      3. EasyOCR      — scanned/image-only PDFs (requires pdf2image + poppler)
+
+    Always returns a PDFData object (never None).
     """
+    if not isinstance(pdf_path, Path):
+        pdf_path = Path(pdf_path)
+
     if not pdf_path.exists():
         logger.error(f"PDF file not found: {pdf_path}")
         return PDFData(text="", metadata={})
-    
+
     text = ""
     metadata = {}
-    extraction_method = "none"
-    
-    # Method 1: Try pdfplumber (better text extraction, handles more PDF formats)
-    if pdfplumber is not None:
-        try:
-            logger.debug(f"Attempting pdfplumber extraction for {pdf_path.name}")
-            with pdfplumber.open(pdf_path) as pdf:
-                text_parts = []
-                total_pages = len(pdf.pages)
-                logger.debug(f"PDF has {total_pages} pages")
-                
-                for i, page in enumerate(pdf.pages, 1):
-                    try:
-                        # Try standard text extraction
-                        page_text = page.extract_text()
-                        if page_text and page_text.strip():
-                            text_parts.append(page_text.strip())
-                        else:
-                            # Try alternative extraction method for this page
-                            # Some PDFs have text in tables or other structures
-                            try:
-                                # Try extracting from tables
-                                tables = page.extract_tables()
-                                if tables:
-                                    for table in tables:
-                                        for row in table:
-                                            if row:
-                                                row_text = " ".join([str(cell) if cell else "" for cell in row])
-                                                if row_text.strip():
-                                                    text_parts.append(row_text.strip())
-                            except Exception as table_e:
-                                logger.debug(f"Table extraction failed for page {i}: {table_e}")
-                            
-                            # Try extracting text with layout preservation
-                            try:
-                                page_text_layout = page.extract_text(layout=True)
-                                if page_text_layout and page_text_layout.strip():
-                                    text_parts.append(page_text_layout.strip())
-                            except Exception as layout_e:
-                                logger.debug(f"Layout extraction failed for page {i}: {layout_e}")
-                    
-                    except Exception as page_e:
-                        logger.warning(f"Error extracting text from page {i} of {pdf_path.name}: {page_e}")
-                        continue
-                
-                text = "\n".join(text_parts)
-                
-                # Extract metadata
-                try:
-                    metadata = pdf.metadata or {}
-                except Exception as meta_e:
-                    logger.debug(f"Could not extract metadata: {meta_e}")
-                    metadata = {}
-                
-                if text.strip():
-                    extraction_method = "pdfplumber"
-                    logger.info(f"Successfully extracted {len(text)} characters from {pdf_path.name} using pdfplumber")
-                elif total_pages > 0:
-                    logger.warning(f"pdfplumber extracted no text from {pdf_path.name} ({total_pages} pages), trying PyPDF2")
-        except Exception as e:
-            logger.warning(f"pdfplumber extraction failed for {pdf_path.name}: {e}")
-    
-    # Method 2: Try PyPDF2 if pdfplumber failed or extracted no text
-    if not text.strip() and PyPDF2 is not None:
-        try:
-            logger.debug(f"Attempting PyPDF2 extraction for {pdf_path.name}")
-            with open(pdf_path, 'rb') as f:
-                pdf_reader = PyPDF2.PdfReader(f)
-                text_parts = []
-                total_pages = len(pdf_reader.pages)
-                logger.debug(f"PDF has {total_pages} pages (PyPDF2)")
-                
-                for i, page in enumerate(pdf_reader.pages, 1):
-                    try:
-                        page_text = page.extract_text()
-                        if page_text and page_text.strip():
-                            text_parts.append(page_text.strip())
-                    except Exception as page_e:
-                        logger.warning(f"Error extracting text from page {i} using PyPDF2: {page_e}")
-                        continue
-                
-                text = "\n".join(text_parts)
-                
-                # Extract metadata
-                try:
-                    if pdf_reader.metadata:
-                        metadata = {
-                            k: str(v) if v else "" 
-                            for k, v in pdf_reader.metadata.items()
-                        }
-                except Exception as meta_e:
-                    logger.debug(f"Could not extract metadata from PyPDF2: {meta_e}")
-                    metadata = {}
-                
-                if text.strip():
-                    extraction_method = "PyPDF2"
-                    logger.info(f"Successfully extracted {len(text)} characters from {pdf_path.name} using PyPDF2")
-                else:
-                    logger.warning(f"PyPDF2 extracted no text from {pdf_path.name}")
-        except Exception as e:
-            logger.warning(f"PyPDF2 extraction failed for {pdf_path.name}: {e}")
-    
-    # Method 3: OCR fallback if text extraction failed
-    if not text.strip() and PDF2IMAGE_AVAILABLE and pytesseract is not None and PILImage is not None:
-        try:
-            logger.info(f"Attempting OCR for {pdf_path.name} (text extraction failed)")
-            # Convert PDF pages to images and OCR
-            images = convert_from_path(str(pdf_path), dpi=300)
-            ocr_text_parts = []
-            
-            for i, image in enumerate(images, 1):
-                try:
-                    ocr_text = pytesseract.image_to_string(image, lang='eng')
-                    if ocr_text and ocr_text.strip():
-                        ocr_text_parts.append(ocr_text.strip())
-                        logger.debug(f"OCR extracted text from page {i}")
-                except Exception as ocr_e:
-                    logger.warning(f"OCR failed for page {i}: {ocr_e}")
-                    continue
-            
-            if ocr_text_parts:
-                text = "\n".join(ocr_text_parts)
-                extraction_method = "OCR"
-                logger.info(f"Successfully extracted {len(text)} characters from {pdf_path.name} using OCR")
-            else:
-                logger.warning(f"OCR extracted no text from {pdf_path.name}")
-        except Exception as e:
-            logger.warning(f"OCR extraction failed for {pdf_path.name}: {e}")
-    elif not text.strip():
-        logger.warning(f"All text extraction methods failed for {pdf_path.name}. OCR not available (requires pdf2image and pytesseract)")
-    
-    # Extract title from metadata or first line of text
-    title = None
-    if metadata:
-        # Try different metadata key formats
-        title = (metadata.get('/Title') or metadata.get('Title') or 
-                metadata.get('title') or metadata.get('Subject') or 
-                metadata.get('/Subject'))
-        if title:
-            title = str(title).strip()
-            if not title or title == 'None':
-                title = None
-    
-    if not title and text:
-        # Try to extract title from first few lines
-        lines = [line.strip() for line in text.split('\n') if line.strip()]
-        for line in lines[:5]:  # Check first 5 non-empty lines
-            if len(line) > 5 and len(line) < 200:
-                # Check if it looks like a title (not too many words, not all caps)
-                words = line.split()
-                if 3 <= len(words) <= 20:
-                    title = line
-                    break
-    
-    # Log final result
+    method = "none"
+
+    # Layer 1: pdfplumber
+    logger.debug(f"PDF Layer 1 (pdfplumber): {pdf_path.name}")
+    text, metadata = _extract_with_pdfplumber(pdf_path)
     if text.strip():
-        logger.info(f"PDF extraction complete for {pdf_path.name}: {len(text)} chars, method={extraction_method}, title={'found' if title else 'not found'}")
+        method = "pdfplumber"
+
+    # Layer 2: PyPDF2
+    if not text.strip():
+        logger.debug(f"PDF Layer 2 (PyPDF2): {pdf_path.name}")
+        text, meta2 = _extract_with_pypdf2(pdf_path)
+        if text.strip():
+            method = "PyPDF2"
+        if not metadata and meta2:
+            metadata = meta2
+
+    # Layer 3: OCR Fallback (Slowest)
+    if not text.strip():
+        if os.environ.get("DISABLE_PDF_OCR") == "1":
+            logger.info(f"Skipping OCR layer for {pdf_path.name} (DISABLE_PDF_OCR=1)")
+        else:
+            logger.info(f"Retrying with OCR Layer 3: {pdf_path.name}")
+            method = "ocr"
+            text = _extract_with_easyocr(pdf_path)
+        if text.strip():
+            method = "easyocr"
+
+    title = _infer_title(metadata, text)
+
+    if text.strip():
+        logger.info(f"PDF extraction OK: {pdf_path.name} | method={method} | chars={len(text)}")
     else:
-        logger.error(f"PDF extraction FAILED for {pdf_path.name}: No text extracted using any method")
-    
+        logger.error(f"PDF extraction FAILED: {pdf_path.name} | All 3 layers returned empty text")
+
     return PDFData(
         text=text,
         title=title,
         metadata=metadata
     )
-

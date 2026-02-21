@@ -188,8 +188,11 @@ def process_submission(
             if temp_pdf_path:
                 logger.info(f"Extracting PDF from downloaded file: {temp_pdf_path}")
                 submission.pdf_data = extract_pdf_text(temp_pdf_path)
-                if submission.pdf_data and submission.pdf_data.text.strip():  # PDF successfully extracted
-                    pdf_missing = False
+                # PDF is NOT missing if it downloaded — empty text means it's a scanned PDF
+                # that all extraction layers failed on; it still counts as present.
+                pdf_missing = False
+                if not submission.pdf_data or not submission.pdf_data.text.strip():
+                    logger.warning(f"PDF downloaded but no text extracted (may be scanned/image PDF): {temp_pdf_path}")
                 # Note: PDF file is saved in current directory (downloaded_files/)
                 # It is kept for potential future use and can be cleaned up manually if needed
             else:
@@ -199,8 +202,10 @@ def process_submission(
             if pdf_path.exists():
                 logger.info(f"Extracting PDF: {pdf_path}")
                 submission.pdf_data = extract_pdf_text(pdf_path)
-                if submission.pdf_data and submission.pdf_data.text.strip():  # PDF successfully extracted
-                    pdf_missing = False
+                # PDF is NOT missing just because text extraction returned empty
+                pdf_missing = False
+                if not submission.pdf_data or not submission.pdf_data.text.strip():
+                    logger.warning(f"PDF found but no text extracted (may be scanned/image PDF): {pdf_path}")
             else:
                 logger.warning(f"PDF file not found: {pdf_path}")
     else:

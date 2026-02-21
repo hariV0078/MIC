@@ -20,14 +20,14 @@ def get_reader():
         import easyocr
         # Initialize reader with English model
         # gpu=False to save VRAM/resources
-        logger.info("Initializing EasyOCR reader (CPU mode)...")
+        print("⏳ Loading EasyOCR reader (CPU mode)...")
         _reader = easyocr.Reader(['en'], gpu=False, verbose=False)
         return _reader
     except ImportError:
-        logger.warning("EasyOCR not installed. Please run: pip install easyocr")
+        print("❌ ERROR: EasyOCR is not installed. Run: pip install easyocr")
         return None
     except Exception as e:
-        logger.error(f"Failed to initialize EasyOCR: {e}")
+        print(f"❌ ERROR: EasyOCR failed to load. Reason: {e}")
         return None
 
 def extract_visual_geotag(image_path: str) -> Tuple[bool, str]:
@@ -55,5 +55,5 @@ def extract_visual_geotag(image_path: str) -> Tuple[bool, str]:
             
         return False, full_text
     except Exception as e:
-        logger.error(f"EasyOCR error on {image_path}: {e}")
+        print(f"❌ EasyOCR error on {image_path}: {e}")
         return False, ""

@@ -109,7 +109,7 @@ def validate_pdf_title(
     )
 
 
-def validate_pdf_content(
+def validate_pdf(
     submission: EventSubmission, 
     gemini_client: GeminiClient
 ) -> List[ValidationResult]:
