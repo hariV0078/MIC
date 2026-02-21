@@ -27,9 +27,10 @@ requests>=2.31.0
 # Environment variables
 python-dotenv>=1.0.0
 
-# Optional: OCR support (uncomment if needed)
-# pdf2image>=1.16.0
-# pytesseract>=0.3.10
+# OCR support (EasyOCR for visual geotags + scanned PDFs)
+easyocr>=1.7.0
+pdf2image>=1.16.0
+# pytesseract>=0.3.10  # NOT needed, EasyOCR is used instead
 
 # Development dependencies (optional)
 # pytest>=7.4.0
