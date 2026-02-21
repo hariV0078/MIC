@@ -121,8 +121,8 @@ def validate_pdf(
     
     # Get extracted text
     pdf_text = ""
-    if submission.pdfs:
-        pdf_text = submission.pdfs[0].extracted_text or ""
+    if submission.pdf_data:
+        pdf_text = submission.pdf_data.text or ""
     
     if not pdf_text:
         # Fail all if no text
@@ -156,11 +156,10 @@ def validate_pdf(
     # 2. LLM Call (Comprehensive)
     # We pass the pdf_hash to enable caching of this expensive call
     pdf_hash = None
-    if submission.pdfs and submission.pdfs[0].path:
+    if pdf_text:
         try:
             import hashlib
-            with open(submission.pdfs[0].path, 'rb') as f:
-                pdf_hash = hashlib.md5(f.read()).hexdigest()
+            pdf_hash = hashlib.md5(pdf_text.encode('utf-8')).hexdigest()
         except Exception:
             pass
 
