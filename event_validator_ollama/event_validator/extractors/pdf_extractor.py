@@ -149,14 +149,21 @@ def _extract_with_easyocr(pdf_path: Path) -> str:
             return ""
 
         # Convert PDF to images using the explicit Poppler path
+        print(f"    [OCR] Converting PDF to images (dpi=200)...")
         images = convert_from_path(
             str(pdf_path), 
             dpi=200, 
             poppler_path=POPPLER_DIR if os.path.exists(POPPLER_DIR) else None
         )
         
+        if not images:
+            print(f"    [OCR] WARNING: No images generated from PDF. Poppler might be failing.")
+            return ""
+
+        print(f"    [OCR] Generated {len(images)} images. Running OCR on each page...")
         parts = []
-        for img in images:
+        for i, img in enumerate(images, 1):
+            print(f"    [OCR] Processing page {i}/{len(images)}...")
             img_array = np.array(img)
             result = reader.readtext(img_array, detail=0)
             page_text = " ".join(result).strip()
