@@ -133,8 +133,16 @@ def _extract_with_easyocr(pdf_path: Path) -> str:
             POPPLER_DIR = os.path.dirname(found)
 
     print(f"\n🔄 Running OCR Fallback on {pdf_path.name}...")
+    if os.path.exists(POPPLER_DIR):
+        print(f"    [Poppler] Using binaries from: {POPPLER_DIR}")
+    else:
+        print(f"    [Poppler] WARNING: No Poppler path found. Falling back to system PATH.")
     
     try:
+        if not PDF2IMAGE_AVAILABLE:
+            print(f"❌ ERROR: pdf2image library not found. OCR cannot run.")
+            return ""
+
         from event_validator.utils.ocr import get_reader
         reader = get_reader()
         if not reader: 
