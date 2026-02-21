@@ -57,9 +57,9 @@ class GeminiClient:
     def __init__(self, api_key: Optional[str] = None, groq_api_key: Optional[str] = None):
         """Initialize Gemini client with optimal models. Falls back to Groq if Gemini fails."""
         # Initialize model names first (always set, even if client fails)
-        # Using gemini-1.5-flash for both text and vision
-        self.text_model = "gemini-2.5-flash"  # High-capacity model: 2000 RPM, 1M TPM
-        self.vision_model = "gemini-2.5-pro"  # Fast and reliable for vision tasks
+        # Using gemini-1.5-flash for maximum speed and higher RPM (Free tier: 15 RPM)
+        self.text_model = "gemini-1.5-flash"
+        self.vision_model = "gemini-1.5-flash"
         
         self.api_key = api_key or os.getenv("GEMINI_API_KEY")
         
