@@ -149,10 +149,12 @@ def _extract_with_easyocr(pdf_path: Path) -> str:
             return ""
 
         # Convert PDF to images using the explicit Poppler path
-        print(f"    [OCR] Converting PDF to images (dpi=200)...")
+        # OPTIMIZED: 150 DPI and limit to first 5 pages for speed
+        print(f"    [OCR] Converting PDF to images (dpi=150, limit=5 pages)...")
         images = convert_from_path(
             str(pdf_path), 
-            dpi=200, 
+            dpi=150, 
+            last_page=5,
             poppler_path=POPPLER_DIR if os.path.exists(POPPLER_DIR) else None
         )
         
