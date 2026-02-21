@@ -68,6 +68,7 @@ tests/
 
 # Downloaded files
 downloaded_files/
+downloaded_pdfs/
 
 # Documentation files (keep README but exclude docs folder)
 docs/

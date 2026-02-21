@@ -23,6 +23,7 @@ ENV/
 # Outputs
 outputs/
 downloaded_files/
+downloaded_pdfs/
 
 # Logs
 *.log
