@@ -102,40 +102,45 @@ class OllamaClient:
     
     def check_pdf_relevance(self, pdf_text: str, activity_name: str) -> bool:
         """
-        Check if the activity name is relevant to the PDF content.
+        Check if the activity name is broadly relevant to the PDF content.
+        Uses ONLY the first page of the PDF for efficiency and accuracy.
         This is Flow 2 of the redefined validation logic.
         """
-        prompt = f"""You are an Innovation Auditor. 
-        Determine if the following Event Activity Name is RELEVANT to the content of the PDF report provided.
+        # Extract first page only using form-feed delimiter
+        first_page = pdf_text
+        if '\f' in pdf_text:
+            first_page = pdf_text.split('\f')[0]
+        elif '\n\n\n' in pdf_text:
+            first_page = pdf_text.split('\n\n\n')[0]
         
-        Activity Name: {activity_name}
+        # Fallback: cap at 2000 chars if no page break found
+        if len(first_page) > 2000:
+            first_page = first_page[:2000]
         
-        PDF Content (Excerpt):
-        {pdf_text[:3000]}
-        
-        RULES:
-        1. Result is YES if the PDF describes the activity mentioned in the Activity Name.
-        2. Result is NO if the PDF is about a completely different topic.
-        
-        OUTPUT FORMAT:
-        RESULT: [YES or NO]
-        REASON: [Short 1-sentence explanation]
-        """
+        prompt = f"""You are a lenient document reviewer. Your job is to check if a PDF report is BROADLY RELATED to an event activity.
+
+Activity Name: {activity_name}
+
+PDF First Page Content:
+{first_page}
+
+RULES:
+1. Answer YES if the PDF content is about the SAME GENERAL TOPIC or subject area as the activity name.
+2. Answer YES even if the exact wording differs — synonyms, paraphrases, and related sub-topics all count as relevant.
+3. Answer NO ONLY if the PDF is about a COMPLETELY DIFFERENT and UNRELATED subject (e.g., activity is about "Entrepreneurship" but PDF is about "Yoga Day").
+4. When in doubt, answer YES.
+
+OUTPUT FORMAT:
+RESULT: [YES or NO]
+REASON: [Short 1-sentence explanation]
+"""
         
         response = self._call_ollama(prompt, model=self.text_model, use_cache=True)
         if response:
             return "RESULT: YES" in response.upper() or ("YES" in response.upper() and "RESULT: NO" not in response.upper())
         
-        return False
-        
-        response = self._call_ollama(prompt, model=self.text_model, use_cache=False)
-        if not response: 
-            return (False, "LLM Error")
-        
-        passed = "YES" in response.upper().split("RESULT:")[1] if "RESULT:" in response.upper() else "YES" in response.upper()
-        
-        llm_reason = response.split("REASON:")[1].strip() if "REASON:" in response else "LLM Decision"
-        return passed, f"LLM CHECK: {llm_reason}"
+        # Default to True (lenient) if LLM fails
+        return True
 
     # Legacy method wrapper
     def check_theme_alignment(self, title: str, theme: str, objectives: str = "", learning_outcomes: str = "") -> bool:

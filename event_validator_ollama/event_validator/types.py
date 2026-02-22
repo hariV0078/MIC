@@ -46,6 +46,7 @@ class EventSubmission:
     overall_score: int = 0
     status: str = "Rejected"
     requirements_not_met: str = ""
+    kill_switch: bool = False
 
 
 @dataclass
