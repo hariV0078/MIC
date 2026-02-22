@@ -6,6 +6,9 @@
 
 ```bash
 curl -fsSL https://ollama.com/install.sh | sh
+
+# Install Poppler (for PDF OCR)
+sudo apt-get update && sudo apt-get install -y poppler-utils
 ```
 
 ### 2. Start Ollama Service

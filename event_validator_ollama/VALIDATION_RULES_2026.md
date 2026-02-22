@@ -226,10 +226,11 @@ The Event Validator performs comprehensive validation across 4 categories with a
 
 ## Technical Implementation Notes
 
-### AI Integration
-- Uses Ollama for semantic analysis and content validation
-- Caching system prevents redundant API calls
-- Circuit breaker pattern for API reliability
+### Performance & Scalability
+- **Optimized OCR**: Only processes the **first 5 pages** of PDFs at **150 DPI** to ensure high-speed processing on CPU.
+- **Concurrency Guard**: Uses a stable **4-worker parallel execution** model to prevent CPU oversubscription.
+- **Caching system**: Prevents redundant API calls (hashed by PDF content).
+- **Circuit breaker**: Pattern for API reliability and fallback.
 
 ### Validation Flow
 1. **Pre-checks**: Quick heuristic validations

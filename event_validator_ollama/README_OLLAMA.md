@@ -8,6 +8,7 @@ This is an open-source version of the Event Validation System using Ollama inste
 - **Equivalent Functionality**: Same validation logic as the Gemini version
 - **Efficient**: Optimized for local deployment with caching and rate limiting
 - **Standardized Scoring**: Uses a 100-point evaluation model with a 60-point acceptance threshold
+- **Performance Optimized**: OCR limited to 5 pages/150 DPI and worker count tuned for CPU stability
 - **Ubuntu Ready**: Includes setup scripts and configuration for Ubuntu servers
 
 ## Prerequisites
@@ -129,15 +130,17 @@ sudo systemctl daemon-reload
 sudo systemctl restart ollama
 ```
 
-### Adjust Rate Limits
+### Adjust Parallel Workers
 
-Edit `.env` or environment variables:
+Avoid setting workers too high on CPU-only systems. For a 16-core CPU, the recommended setting is:
 
 ```bash
-# Higher rate for local deployment (no API limits)
-DEFAULT_MAX_WORKERS=16
-GEMINI_RPM=300  # Higher for local
+# Optimized for CPU stability (16-core server)
+DEFAULT_MAX_WORKERS=4 
 ```
+
+### OCR Performance
+The system is pre-configured to only OCR the **first 5 pages** of any PDF at **150 DPI**. This provides the best balance of speed and validation accuracy.
 
 ## API Endpoints
 

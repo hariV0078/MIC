@@ -4,8 +4,8 @@ This document details all changes made to the event validation system across mul
 
 ## Table of Contents
 1. [Previous Request Changes](#previous-request-changes)
-2. [Current Request Changes](#current-request-changes)
-3. [Summary](#summary)
+7. [OCR Performance & Stability Update](#ocr-performance--stability-update)
+8. [Summary](#summary)
 
 ---
 

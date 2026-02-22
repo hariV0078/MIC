@@ -10,9 +10,13 @@ This guide covers deploying the Event Validation System with Ollama on an Ubuntu
 - GPU optional but recommended for better performance
 - Root/sudo access
 
-## Step 1: Install Ollama
+## Step 1: Install System Dependencies
 
 ```bash
+# Install Poppler (CRITICAL for PDF OCR)
+sudo apt-get update
+sudo apt-get install -y poppler-utils libgl1-mesa-glx libglib2.0-0
+
 # Install Ollama
 curl -fsSL https://ollama.com/install.sh | sh
 
@@ -76,9 +80,9 @@ OLLAMA_BASE_URL=http://localhost:11434
 OLLAMA_TEXT_MODEL=llama3.2:3b
 OLLAMA_VISION_MODEL=llava:latest
 
-# Processing Configuration
-DEFAULT_MAX_WORKERS=12
-GEMINI_RPM=300
+# Processing Configuration (Optimized for 16-core CPU)
+DEFAULT_MAX_WORKERS=4
+GEMINI_RPM=15
 
 # Acceptance threshold
 ACCEPTANCE_THRESHOLD=60
