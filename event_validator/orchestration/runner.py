@@ -384,57 +384,95 @@ def process_submission(
         logger.info(f"PDF Validation Summary: 0/{pdf_total} passed | Points: {pdf_points}/25 (PDF missing or unreadable)")
         logger.info(f"  [✗ FAIL] PDF Validation: 0 points | PDF file missing or could not be downloaded")
     
-    # Image validation
-    logger.info("─" * 80)
-    logger.info("IMAGE VALIDATION (20 points total)")
-    logger.info("─" * 80)
-    if submission.images:
-        # Check budget before image validation (1 API call per image, but we use first image)
-        if not budget.can_make_call("image_validation"):
-            logger.warning(f"Budget exhausted before image validation. Skipping API call.")
-            # Create failure results
-            from event_validator.config.rules import IMAGE_RULES
-            image_results = []
-            for rule_name, points in IMAGE_RULES:
-                image_results.append(ValidationResult(
-                    criterion=rule_name,
-                    passed=False,
-                    points_awarded=0,
-                    message="Image validation skipped: API call budget exhausted"
-                ))
-        else:
-            image_results = validate_images(submission, gemini_client)
-            # Record API call (image validation makes 1 call per image, but optimized to 1)
-            budget.record_call("image_validation", success=True)
-        all_results.extend(image_results)
+    # ═══════════════════════════════════════════════════════════════
+    # KILL SWITCH ENFORCEMENT (Types 1, 2, 4)
+    # If Flow 2 failed, zero out Theme + Image scores immediately
+    # ═══════════════════════════════════════════════════════════════
+    if submission.kill_switch:
+        logger.warning("═" * 80)
+        logger.warning("KILL SWITCH ACTIVE: Flow 2 (PDF Relevance) failed.")
+        logger.warning("Zeroing Theme scores and skipping Image analysis.")
+        logger.warning("═" * 80)
         
-        # Log image validation results
-        image_points = sum(r.points_awarded for r in image_results)
-        image_passed = sum(1 for r in image_results if r.passed)
-        image_total = len(image_results)
-        logger.info(f"Image Validation Summary: {image_passed}/{image_total} passed | Points: {image_points}/20")
-        for result in image_results:
-            status = "✓ PASS" if result.passed else "✗ FAIL"
-            logger.info(f"  [{status}] {result.criterion}: {result.points_awarded} points | {result.message or 'OK'}")
+        # Zero out theme scores: replace existing theme results
+        from event_validator.config.rules import THEME_RULES, IMAGE_RULES
         
-        # Removed delay - parallel processing handles rate limiting better
-    else:
-        logger.warning("Skipping image validation - no images available")
-        # Create failure result for missing images
-        from event_validator.config.rules import IMAGE_RULES
-        image_total_points = sum(points for _, points in IMAGE_RULES)
-        missing_image_result = ValidationResult(
-            criterion="Image Validation",
-            passed=False,
-            points_awarded=0,
-            message="Event photos missing or invalid"
-        )
-        image_results = [missing_image_result]
+        # Remove existing theme results from all_results
+        all_results = [r for r in all_results if r not in theme_results]
+        theme_results = []
+        for rule_name, points in THEME_RULES:
+            theme_results.append(ValidationResult(
+                criterion=rule_name,
+                passed=False,
+                points_awarded=0,
+                message="Kill switch active: PDF content irrelevant to activity (Flow 2 Fail)"
+            ))
+        all_results.extend(theme_results)
+        theme_points = 0
+        logger.info(f"Theme scores zeroed: 0/{len(THEME_RULES)} passed | Points: 0")
+        
+        # Zero out image scores: skip analysis entirely
+        image_results = []
+        for rule_name, points in IMAGE_RULES:
+            image_results.append(ValidationResult(
+                criterion=rule_name,
+                passed=False,
+                points_awarded=0,
+                message="Kill switch active: Image analysis skipped (Flow 2 Fail)"
+            ))
         all_results.extend(image_results)
         image_points = 0
-        image_total = len(IMAGE_RULES)
-        logger.info(f"Image Validation Summary: 0/{image_total} passed | Points: {image_points}/20 (images missing or invalid)")
-        logger.info(f"  [✗ FAIL] Image Validation: 0 points | Event photos missing or invalid")
+        logger.info(f"Image scores zeroed: 0/{len(IMAGE_RULES)} passed | Points: 0 (SKIPPED)")
+    else:
+        # Image validation (only if kill switch is NOT active)
+        logger.info("─" * 80)
+        logger.info("IMAGE VALIDATION (20 points total)")
+        logger.info("─" * 80)
+        if submission.images:
+            # Check budget before image validation (1 API call per image, but we use first image)
+            if not budget.can_make_call("image_validation"):
+                logger.warning(f"Budget exhausted before image validation. Skipping API call.")
+                # Create failure results
+                from event_validator.config.rules import IMAGE_RULES
+                image_results = []
+                for rule_name, points in IMAGE_RULES:
+                    image_results.append(ValidationResult(
+                        criterion=rule_name,
+                        passed=False,
+                        points_awarded=0,
+                        message="Image validation skipped: API call budget exhausted"
+                    ))
+            else:
+                image_results = validate_images(submission, gemini_client)
+                # Record API call (image validation makes 1 call per image, but optimized to 1)
+                budget.record_call("image_validation", success=True)
+            all_results.extend(image_results)
+            
+            # Log image validation results
+            image_points = sum(r.points_awarded for r in image_results)
+            image_passed = sum(1 for r in image_results if r.passed)
+            image_total = len(image_results)
+            logger.info(f"Image Validation Summary: {image_passed}/{image_total} passed | Points: {image_points}/20")
+            for result in image_results:
+                status = "✓ PASS" if result.passed else "✗ FAIL"
+                logger.info(f"  [{status}] {result.criterion}: {result.points_awarded} points | {result.message or 'OK'}")
+        else:
+            logger.warning("Skipping image validation - no images available")
+            # Create failure result for missing images
+            from event_validator.config.rules import IMAGE_RULES
+            image_total_points = sum(points for _, points in IMAGE_RULES)
+            missing_image_result = ValidationResult(
+                criterion="Image Validation",
+                passed=False,
+                points_awarded=0,
+                message="Event photos missing or invalid"
+            )
+            image_results = [missing_image_result]
+            all_results.extend(image_results)
+            image_points = 0
+            image_total = len(IMAGE_RULES)
+            logger.info(f"Image Validation Summary: 0/{image_total} passed | Points: {image_points}/20 (images missing or invalid)")
+            logger.info(f"  [✗ FAIL] Image Validation: 0 points | Event photos missing or invalid")
     
     # Duplicate validation (within batch)
     logger.info("─" * 80)
