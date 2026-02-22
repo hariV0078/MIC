@@ -150,8 +150,40 @@ def validate_pdf(
         criterion=title_rule,
         passed=final_title_pass,
         points_awarded=title_points if final_title_pass else 0,
-        message="" if final_title_pass else f"Title mismatch. Expected similar to: {expected_title}"
+        message="" if final_title_pass else f"PDF title does not match expected title"
     ))
+    
+    # KILL SWITCH: If title doesn't match for types 1,2,4 → zero ALL remaining scores
+    if not final_title_pass and event_driven in (1, 2, 4):
+        logger.warning(f"PDF Title mismatch for event_driven={event_driven}. Activating Kill Switch.")
+        submission.kill_switch = True
+        # Zero out expert details
+        rule_name, points = PDF_RULES[1]
+        results.append(ValidationResult(
+            criterion=rule_name,
+            passed=False,
+            points_awarded=0,
+            message="Kill switch: PDF title mismatch — expert score zeroed"
+        ))
+        # Zero out objectives/learning
+        rule_name, points = PDF_RULES[2]
+        results.append(ValidationResult(
+            criterion=rule_name,
+            passed=False,
+            points_awarded=0,
+            message="Kill switch: PDF title mismatch — objectives/learning score zeroed"
+        ))
+        # Zero remaining rules if they exist
+        for i in range(3, len(PDF_RULES)):
+            rule_name, points = PDF_RULES[i]
+            results.append(ValidationResult(
+                criterion=rule_name,
+                passed=False,
+                points_awarded=0,
+                message="Kill switch: PDF title mismatch — score zeroed"
+            ))
+        logger.info("Kill switch active: All PDF scores zeroed, theme+image will be zeroed by runner.")
+        return results
     
     # Rule 2: Expert Details
     rule_name, points = PDF_RULES[1]
