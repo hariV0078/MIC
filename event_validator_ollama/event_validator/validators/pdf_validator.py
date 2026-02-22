@@ -435,14 +435,37 @@ def validate_pdf(submission: EventSubmission, ollama_client: OllamaClient) -> Li
     if event_driven != 3:
         # Rule 0: PDF title matches metadata (7 points)
         rule_name, points = PDF_RULES[0]
-        # Use existing unified result for title match if available
+        # Use existing unified result for title match
         title_match = validation_results.get("title_match", False)
         results.append(ValidationResult(
             criterion=rule_name,
             passed=title_match,
             points_awarded=points if title_match else 0,
-            message="" if title_match else f"PDF title does not match metadata semantically"
+            message="" if title_match else f"PDF title does not match expected title"
         ))
+        
+        # KILL SWITCH: If title doesn't match for types 1,2,4 → zero ALL remaining scores
+        if not title_match and event_driven in (1, 2, 4):
+            logger.warning(f"PDF Title mismatch for event_driven={event_driven}. Activating Kill Switch.")
+            submission.kill_switch = True
+            # Zero out expert details (Rule 1)
+            rule_name, points = PDF_RULES[1]
+            results.append(ValidationResult(
+                criterion=rule_name,
+                passed=False,
+                points_awarded=0,
+                message="Kill switch: PDF title mismatch — expert score zeroed"
+            ))
+            # Zero out objectives/learning (Rule 2)
+            rule_name, points = PDF_RULES[2]
+            results.append(ValidationResult(
+                criterion=rule_name,
+                passed=False,
+                points_awarded=0,
+                message="Kill switch: PDF title mismatch — objectives/learning score zeroed"
+            ))
+            logger.info("Kill switch active: All PDF scores zeroed, theme+image will be zeroed by runner.")
+            return results
     
     # Rule 1: Expert details present (7 points)
     # Use heuristic check first, then AI result
@@ -456,21 +479,19 @@ def validate_pdf(submission: EventSubmission, ollama_client: OllamaClient) -> Li
     ))
     
     # Rule 2: Objectives and learning align (6 points)
-    # SPECIAL CASE: If title doesn't match, this should probably fail too? 
-    # Current logic relies on semantic check results
     rule_name, points = PDF_RULES[2]
     
     # Check both learning_match AND objectives_match from unified result
     learning_passed = validation_results.get("learning_match", False) or validation_results.get("objectives_match", False)
     
-    # If title failed, this fails too (per user request for strictness)
+    # If title failed (event_driven=3 case), this fails too
     final_pass = learning_passed and title_match
     
     results.append(ValidationResult(
         criterion=rule_name,
         passed=final_pass,
         points_awarded=points if final_pass else 0,
-        message="" if final_pass else ("Objectives/Learning outcomes not aligned" if title_match else "PDF title mismatch - objectives/learning validation failed")
+        message="" if final_pass else ("Objectives/Learning outcomes not clearly stated/aligned in PDF" if title_match else "PDF title mismatch - objectives/learning validation failed")
     ))
     
     logger.debug(f"PDF validation complete. Reasoning: {validation_results.get('reasoning', 'N/A')}")

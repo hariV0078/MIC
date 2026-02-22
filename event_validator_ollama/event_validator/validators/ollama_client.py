@@ -208,38 +208,42 @@ REASON: [Short 1-sentence explanation]
     ) -> Dict[str, Any]:
         """
         Validate PDF content against expected metadata using LLM.
+        Single unified call that checks all PDF rules at once.
         """
-        prompt = f"""
-        Analyze this event report PDF text.
-        
-        EXPECTED DATA:
-        Objectives: {expected_objectives or 'N/A'}
-        Learning Outcomes: {expected_learning_outcomes or 'N/A'}
-        Min Participants: {expected_participants or 15}
-        
-        PDF TEXT:
-        {pdf_text[:2000]}
-        
-        TASK:
-        1. Does the PDF contain details about an expert/speaker? (Name, designation, etc.)
-        2. Do the objectives/content in text align with: "{expected_objectives}"?
-        3. Do the learning outcomes align with: "{expected_learning_outcomes}"?
-        4. Does the text confirm {expected_participants}+ participants attended?
-        
-        OUTPUT JSON ONLY:
-        {{
-            "expert_details_present": true/false,
-            "objectives_match": true/false,
-            "learning_match": true/false,
-            "participants_valid": true/false,
-            "reasoning": "short explanation"
-        }}
-        """
+        prompt = f"""You are validating a PDF report for an event submission. Analyze the PDF text and return ALL validation results in a single response.
+
+PDF Text (first 2000 characters):
+{pdf_text[:2000]}
+
+Expected Metadata:
+- Title: {expected_title or 'Not specified'}
+- Objectives: {expected_objectives or 'Not specified'}
+- Learning Outcomes: {expected_learning_outcomes or 'Not specified'}
+- Expected Participants: {expected_participants or 'Not specified (needs 15+)'}
+
+Task: Validate ALL of the following in ONE analysis:
+1. Does the PDF title/topic match the expected title? (SIMILARITY IS ACCEPTABLE - exact match not required. Accept if titles are semantically similar, have similar meaning, or contain key words from expected title. Minor variations in wording, word order, or formatting are acceptable.)
+2. Are expert details present? (Look for: expert name, designation, affiliation, speaker, facilitator, resource person, keynote speaker, presenter)
+3. Do the objectives in the PDF align with the expected objectives? (semantic alignment)
+4. Do the learning outcomes in the PDF align with the expected learning outcomes? (semantic alignment)
+5. Does the PDF contain participant information indicating 15+ participants?
+
+OUTPUT JSON ONLY:
+{{
+    "title_match": true/false,
+    "expert_details_present": true/false,
+    "objectives_match": true/false,
+    "learning_match": true/false,
+    "participants_valid": true/false,
+    "reasoning": "short explanation"
+}}
+"""
         
         response = self._call_ollama(prompt, model=self.text_model, use_cache=True, options={'format': 'json'})
 
         
         default_result = {
+            "title_match": False,
             "expert_details_present": False,
             "objectives_match": False,
             "learning_match": False,
@@ -260,6 +264,7 @@ REASON: [Short 1-sentence explanation]
                 
             result = json.loads(json_str)
             return {
+                "title_match": bool(result.get("title_match", False)),
                 "expert_details_present": bool(result.get("expert_details_present", False)),
                 "objectives_match": bool(result.get("objectives_match", False)),
                 "learning_match": bool(result.get("learning_match", False)),
