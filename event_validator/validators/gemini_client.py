@@ -379,93 +379,6 @@ class GeminiClient:
         
         return None
 
-    def _clean_title(self, title: str, theme: str = "") -> str:
-        """
-        Normalize title by removing theme, buzzwords, and punctuation.
-        Used for both basic alignment checks and PDF title validation.
-        """
-        t = title.lower().strip()
-        th = theme.lower().strip()
-
-        # Normalize text
-        t_norm = t.replace("&", "and")
-        th_norm = th.replace("&", "and")
-        
-        cleaned_title = t_norm
-
-        # Remove the exact theme name from the title
-        if th_norm and th_norm in t_norm:
-            cleaned_title = re.sub(re.escape(th_norm), "", t_norm).strip()
-        
-        # Also remove common buzzwords to expose the core subject
-        buzzwords = [
-            "entrepreneurship", "entrepreneur", "startup", "start-up", 
-            "innovation", "design thinking", "workshop on", "session on", 
-            "seminar on", "opportunities in", "guest lecture on", "field of", "opportunities"
-        ]
-        for bw in buzzwords:
-            cleaned_title = cleaned_title.replace(bw, "")
-        
-        # Clean up punctuation
-        cleaned_title = re.sub(r"^[\W_]+|[\W_]+$", "", cleaned_title).strip()
-
-        # Fallback: If cleaning removed almost everything, use original
-        if len(cleaned_title) < 3: 
-            cleaned_title = t_norm
-            
-        return cleaned_title
-
-    def _check_hard_rules(self, title: str, theme: str = "") -> tuple[Optional[bool], str]:
-        """
-        Python-based Gatekeeper with Strict Theme Stripping.
-        """
-        t = title.lower().strip()
-        cleaned_title = self._clean_title(title, theme)
-
-        # --- STEP 2: BANNED TOOLS CHECK (ON CLEANED TITLE) ---
-        banned_tools = [
-            "sap", "power bi", "arduino", "iot", "web development", "web app", 
-            "python", "java", "spring boot", "android", "react", "robotics", 
-            "pottery", "construction management", "energy storage", "software engineering",
-            "cloud computing", "cyber security", "data processing", "aws", "ai", 
-            "artificial intelligence", "mems sensors", "3d printing", "machine learning", "ml",
-            "sensor technology"
-        ]
-
-        for tool in banned_tools:
-            # Check strict tool presence in the cleaned text
-            if tool in cleaned_title:
-                return False, f"HARD REJECT: Core activity is technical training on '{tool}' (Detected after stripping theme/buzzwords)."
-
-        # --- STEP 3: BANNED TOPICS CHECK (ON FULL TITLE) ---
-        banned_topics = [
-            "national mathematics day", "unity day", "yoga day", "environment day", 
-            "celebration", "jayanti", "women's role", "traffic", "health", 
-            "ayurveda", "blood donation", "sexual harassment", "swachhata",
-            "orientation session", "induction program"
-        ]
-        
-        for topic in banned_topics:
-            if topic in t: # Use normalized title 't' (lowercase)
-                return False, f"HARD REJECT: General Awareness/Celebration '{topic}'."
-
-        # --- STEP 4: MANDATORY ACCEPTS (ON FULL TITLE) ---
-        accept_keywords = [
-            "incubation", "incubator", "demo day", "hackathon", "ideation", 
-            "patent", "ipr", "intellectual property", "prototype", "poc", 
-            "field visit", "industry visit", "exposure visit"
-        ]
-        
-        for kw in accept_keywords:
-            if kw in t:
-                return True, f"HARD ACCEPT: Mandatory IIC activity '{kw}' detected."
-
-        # Special check for Entrepreneurship
-        if "entrepreneur" in t or "startup" in t or "start-up" in t:
-             return True, "HARD ACCEPT: Valid Entrepreneurship/Startup focus (No banned tools found)."
-
-        return None, ""
-    
     def check_theme_alignment(
         self,
         title: str,
@@ -478,27 +391,20 @@ class GeminiClient:
         Check if title, objectives, and learning outcomes align with theme.
         Returns True if aligned, False otherwise.
         
-        OPTIMIZED: Uses Sandwich Logic (Hard Rules -> LLM Semantic Check).
+        REDEFINED: Purely semantic check using LLM. Redundant Python filters removed.
         """
-        # STEP 1: Python Hard Rules
-        decision, reason = self._check_hard_rules(title, theme)
-        
-        if decision is not None:
-            logger.info(f"Theme alignment hard decision for '{title}': {decision} ({reason})")
-            return decision
-
-        # STEP 2: LLM Semantic Check (Legacy Prompt)
         prompt = f"""You are a strict Innovation Auditor.
-        The title "{title}" passed the basic keyword filters. Now determine if it is a VALID Innovation/Design Thinking activity.
+        Determine if the following Event Activity is a VALID Innovation/Design Thinking/Entrepreneurship initiative.
 
         Theme: {theme}
-        Event Title: {title}
-        Objectives: {objectives[:200]}
+        Activity Name: {title}
+        Objectives: {objectives[:300]}
+        Learning Outcomes: {learning_outcomes[:300]}
 
         RULES:
-        1. ACCEPT: Workshops on "Design Thinking", "Critical Thinking", "Problem Solving" applied to technical fields.
-        2. REJECT: Generic academic lectures, scientific seminars, or skill training without business outcome.
-        3. REJECT: General skill training not related to innovation (e.g. "Communication Skills", "Resume Writing").
+        1. ACCEPT: Workshops on "Design Thinking", "Critical Thinking", "Problem Solving", "Entrepreneurship", or "Startups" applied to technical or business fields.
+        2. REJECT: Generic academic lectures, scientific seminars, or technical skill training (e.g. Java, Python) without a clear innovation/business outcome.
+        3. REJECT: General awareness, celebrations, or orientation sessions.
 
         OUTPUT FORMAT:
         RESULT: [YES or NO]
@@ -623,6 +529,38 @@ PARTICIPANTS_VALID: YES or NO"""
                 results["participants_valid"] = "YES" in line.upper()
         
         return results
+    
+    def check_pdf_relevance(
+        self,
+        pdf_text: str,
+        activity_name: str
+    ) -> bool:
+        """
+        Check if the activity name is relevant to the PDF content.
+        This is Flow 2 of the redefined validation logic.
+        """
+        prompt = f"""You are an Innovation Auditor. 
+        Determine if the following Event Activity Name is RELEVANT to the content of the PDF report provided.
+        
+        Activity Name: {activity_name}
+        
+        PDF Content (Excerpt):
+        {pdf_text[:3000]}
+        
+        RULES:
+        1. Result is YES if the PDF describes the activity mentioned in the Activity Name.
+        2. Result is NO if the PDF is about a completely different topic, or is a generic document that does not prove the specific event happened.
+        
+        OUTPUT FORMAT:
+        RESULT: [YES or NO]
+        REASON: [Short 1-sentence explanation]
+        """
+        
+        response = self._call_gemini(prompt, use_cache=True)
+        if response:
+            return "RESULT: YES" in response.upper() or ("YES" in response.upper() and "RESULT: NO" not in response.upper())
+        
+        return False
     
     def validate_pdf_comprehensive(
         self,

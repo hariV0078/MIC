@@ -9,43 +9,17 @@ from event_validator.validators.gemini_client import GeminiClient
 logger = logging.getLogger(__name__)
 
 # Re-use the clean_title logic from client for consistency
-def _clean_title(title: str, theme: str = "") -> str:
-    import re
-    t = title.lower().strip()
-    th = theme.lower().strip()
-    
-    # Normalize
-    t = t.replace("&", "and")
-    th = th.replace("&", "and")
-    
-    # Remove theme from title if present
-    if th and th in t:
-        t = re.sub(re.escape(th), "", t).strip()
-    
-    # Remove buzzwords
-    buzzwords = [
-        "entrepreneurship", "entrepreneur", "startup", "start-up", 
-        "innovation", "design thinking", "workshop on", "session on", 
-        "seminar on", "opportunities in", "guest lecture on", "field of", "opportunities"
-    ]
-    for bw in buzzwords:
-        t = t.replace(bw, "")
-    
-    # Remove punctuation
-    t = re.sub(r"^[\W_]+|[\W_]+$", "", t).strip()
-    return t
 
 def validate_pdf_title(
     submission: EventSubmission,
     gemini_client: Optional[GeminiClient] = None,
     pdf_text: str = ""
 ) -> ValidationResult:
-    """Check if PDF title matches event title."""
+    """Check if PDF title matches event title semantically."""
     rule_name, points = PDF_RULES[0]
     
     row_data = submission.row_data
     expected_title = row_data.get('Title', '') or row_data.get('activity_name', '')
-    theme = row_data.get('Theme', '')
     
     if not pdf_text:
         return ValidationResult(
@@ -54,37 +28,15 @@ def validate_pdf_title(
             points_awarded=0,
             message="No PDF text extracted"
         )
-    
-    # STRATEGY 1: Simple String Matching (Fast & Cheap)
-    cleaned_pdf_text = pdf_text[:1000].lower() # Check first 1000 chars
-    cleaned_expected = _clean_title(expected_title, theme)
-    
-    # Direct match of cleaned title
-    if cleaned_expected and len(cleaned_expected) > 4 and cleaned_expected in cleaned_pdf_text:
-        logger.info(f"PDF Title Match: Found '{cleaned_expected}' in PDF text (String Match)")
-        return ValidationResult(
-            criterion=rule_name,
-            passed=True,
-            points_awarded=points,
-            message="Title matched via string comparison"
-        )
         
-    # STRATEGY 2: LLM Validation (if string match fails)
     if not gemini_client:
         return ValidationResult(
             criterion=rule_name,
             passed=False,
             points_awarded=0,
-            message="Title not found in PDF (String match failed, no LLM available)"
+            message="LLM not available for semantic title check"
         )
         
-    # Note: We rely on the comprehensive check result if available, 
-    # but for this specific function we might need to query if not already cached.
-    # Ideally, we should pass the comprehensive result to these functions to avoid re-querying.
-    # For now, we'll assume validate_pdf_content orchestrates this or we accept a re-query (cached).
-    
-    # We will let validate_pdf_content handle the LLM part if simple match fails
-    # But since this function needs to return a result, we'll check consistency here
     consistency = gemini_client.check_pdf_consistency(
         pdf_text=pdf_text,
         expected_title=expected_title,
@@ -116,6 +68,10 @@ def validate_pdf(
     """
     Run all PDF content validations using a single comprehensive LLM call.
     Includes fallback to string matching for title to save tokens.
+    
+    REDEFINED FLOW (Types 1, 2, 4):
+    Flow 2: Check if activity name is relevant to PDF content.
+    If relevance fails, mark 0 for all PDF and signal kill switch.
     """
     results = []
     
@@ -124,6 +80,18 @@ def validate_pdf(
     if submission.pdf_data:
         pdf_text = submission.pdf_data.text or ""
     
+    # Get expected values
+    row_data = submission.row_data
+    expected_title = row_data.get('Title', '') or row_data.get('activity_name', '')
+    expected_objectives = row_data.get('Objective', '')
+    expected_outcomes = row_data.get('Learning Outcomes', '')
+    theme = row_data.get('Theme', '')
+    
+    # activity_name for relevance check
+    original_data = getattr(submission, '_original_row_data', row_data)
+    activity_name = original_data.get('activity_name', expected_title)
+    event_driven = original_data.get('event_driven')
+
     if not pdf_text:
         # Fail all if no text
         for rule_name, _ in PDF_RULES:
@@ -133,35 +101,36 @@ def validate_pdf(
                 points_awarded=0,
                 message="No PDF text extracted"
             ))
+        # No text = Relevance failed
+        if event_driven in (1, 2, 4):
+            submission.kill_switch = True
         return results
 
-    # Get expected values
-    row_data = submission.row_data
-    expected_title = row_data.get('Title', '') or row_data.get('activity_name', '')
-    expected_objectives = row_data.get('Objective', '')
-    expected_outcomes = row_data.get('Learning Outcomes', '') # Fix key name if needed
-    theme = row_data.get('Theme', '')
-    
-    # 1. OPTIMIZATION: Try String Match for Title FIRST
-    title_rule, title_points = PDF_RULES[0]
-    title_passed = False
-    
-    cleaned_pdf_head = pdf_text[:1000].lower()
-    cleaned_expected = _clean_title(expected_title, theme)
-    
-    if cleaned_expected and len(cleaned_expected) > 4 and cleaned_expected in cleaned_pdf_head:
-        title_passed = True
-        logger.info(f"PDF Title Pre-check: Passed via string match ('{cleaned_expected}')")
+    # FLOW 2: Relevance Gate (For Types 1, 2, 4)
+    if event_driven in (1, 2, 4):
+        logger.info(f"Executing Flow 2: PDF Relevance Check for '{activity_name}'")
+        is_relevant = gemini_client.check_pdf_relevance(pdf_text, activity_name)
         
-    # 2. LLM Call (Comprehensive)
+        if not is_relevant:
+            logger.warning(f"FLOW 2 FAIL: PDF content not relevant to activity '{activity_name}'. Activating Kill Switch.")
+            submission.kill_switch = True
+            for rule_name, _ in PDF_RULES:
+                results.append(ValidationResult(
+                    criterion=rule_name,
+                    passed=False,
+                    points_awarded=0.0,
+                    message=f"REJECTED: PDF content irrelevant to activity '{activity_name}' (Flow 2 Fail)"
+                ))
+            return results
+
+    # LLM Call (Comprehensive)
     # We pass the pdf_hash to enable caching of this expensive call
     pdf_hash = None
-    if pdf_text:
-        try:
-            import hashlib
-            pdf_hash = hashlib.md5(pdf_text.encode('utf-8')).hexdigest()
-        except Exception:
-            pass
+    try:
+        import hashlib
+        pdf_hash = hashlib.md5(pdf_text.encode('utf-8')).hexdigest()
+    except Exception:
+        pass
 
     llm_results = gemini_client.validate_pdf_comprehensive(
         pdf_text=pdf_text,
@@ -174,8 +143,9 @@ def validate_pdf(
     
     # 3. Construct Results
     
-    # Rule 1: Title Match (Use String match OR LLM result)
-    final_title_pass = title_passed or llm_results.get("title_match", False)
+    # Rule 1: Title Match (Purely Semantic)
+    title_rule, title_points = PDF_RULES[0]
+    final_title_pass = llm_results.get("title_match", False)
     results.append(ValidationResult(
         criterion=title_rule,
         passed=final_title_pass,
