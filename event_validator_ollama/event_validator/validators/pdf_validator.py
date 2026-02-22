@@ -8,6 +8,8 @@ from event_validator.types import ValidationResult, EventSubmission
 from event_validator.config.rules import PDF_RULES
 from event_validator.validators.ollama_client import OllamaClient
 
+logger = logging.getLogger(__name__)
+
 def validate_pdf_title_match(
     submission: EventSubmission,
     ollama_client: OllamaClient
