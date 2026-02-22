@@ -197,8 +197,25 @@ def validate_15_plus_participants_visible(
 
 
 def validate_images(submission: EventSubmission, ollama_client: OllamaClient) -> List[ValidationResult]:
-    """Run all image validations."""
+    """
+    Run all image validations.
+    
+    REDEFINED FLOW:
+    If kill_switch is active (from Flow 2 PDF failure), skip analysis and award 0 points.
+    """
     results = []
+    
+    # KILL SWITCH: For Types 1, 2, 4 if Flow 2 failed
+    if getattr(submission, 'kill_switch', False):
+        logger.warning("Kill Switch is active (Flow 2 Fail). Skipping image analysis and awarding 0 points.")
+        for rule_name, points in IMAGE_RULES:
+            results.append(ValidationResult(
+                criterion=rule_name,
+                passed=False,
+                points_awarded=0.0,
+                message="REJECTED: Kill switch active due to PDF relevance failure (Flow 2)"
+            ))
+        return results
     
     if not submission.images:
         results.append(validate_geotag_present(submission))

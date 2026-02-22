@@ -8,75 +8,11 @@ from event_validator.types import ValidationResult, EventSubmission
 from event_validator.config.rules import PDF_RULES
 from event_validator.validators.ollama_client import OllamaClient
 
-try:
-    from thefuzz import fuzz
-    FUZZ_AVAILABLE = True
-except ImportError:
-    fuzz = None
-    FUZZ_AVAILABLE = False
-
-logger = logging.getLogger(__name__)
-
-
-def _fuzzy_match_pdf_title(pdf_text: str, expected_title: str, activity_name: str) -> bool:
-    """
-    Fuzzy match PDF title using first half of first page content.
-    
-    Steps:
-    1. Extract first page text (use first chunk before page break markers)
-    2. Take the first half of that text
-    3. Use fuzzy matching (token_set_ratio) to compare activity_name against the content
-    4. Accept if score >= 60%
-    
-    Returns True if the activity name fuzzy-matches the first page content.
-    """
-    if not pdf_text or not (expected_title or activity_name):
-        return False
-    
-    # Use activity_name preferentially, fall back to expected_title
-    search_term = activity_name.strip() if activity_name.strip() else expected_title.strip()
-    if not search_term:
-        return False
-    
-    # Extract first page content:
-    # Try common page break markers first
-    first_page_text = pdf_text
-    page_delimiters = ['\f', '\n\n\n', '--- Page', 'Page 2']
-    for delimiter in page_delimiters:
-        if delimiter in pdf_text:
-            first_page_text = pdf_text.split(delimiter)[0]
-            break
-    
-    # If no delimiter found, estimate first page as first 2000 chars
-    if first_page_text == pdf_text and len(pdf_text) > 2000:
-        first_page_text = pdf_text[:2000]
-    
-    # Take first half of first page
-    half_len = max(len(first_page_text) // 2, 200)  # At least 200 chars
-    first_half = first_page_text[:half_len]
-    
-    if not first_half.strip():
-        return False
-    
-    if not FUZZ_AVAILABLE:
-        # Fallback: simple case-insensitive substring check
-        logger.warning("thefuzz not available, falling back to substring match")
-        return search_term.lower() in first_half.lower()
-    
-    # Use token_set_ratio for fuzzy matching
-    # This handles word reordering and partial matches well
-    score = fuzz.token_set_ratio(search_term.lower(), first_half.lower())
-    logger.info(f"PDF title fuzzy match: score={score}% (threshold=60%) | "
-                f"search_term='{search_term[:50]}' vs first_half='{first_half[:80]}...'")
-    
-    return score >= 60
-
-
 def validate_pdf_title_match(
     submission: EventSubmission,
     ollama_client: OllamaClient
 ) -> ValidationResult:
-    """Check if PDF title matches metadata."""
+    """Check if PDF title matches metadata semantically."""
     rule_name, points = PDF_RULES[0]
     
     row_data = submission.row_data
@@ -90,10 +26,7 @@ def validate_pdf_title_match(
             message="PDF text not extracted"
         )
     
-    pdf_title = submission.pdf_data.title or ""
-    pdf_text = submission.pdf_data.text[:500]  # First 500 chars for title search
-    
-    # Use Groq for fuzzy title matching
+    # Use LLM for semantic title matching
     consistency = ollama_client.check_pdf_consistency(
         pdf_text=submission.pdf_data.text,
         expected_title=expected_title,
@@ -107,7 +40,7 @@ def validate_pdf_title_match(
             criterion=rule_name,
             passed=True,
             points_awarded=points,
-            message=""
+            message="Title matched via semantic analysis"
         )
     else:
         return ValidationResult(
@@ -398,6 +331,23 @@ def validate_pdf(submission: EventSubmission, ollama_client: OllamaClient) -> Li
     # Get activity_name from original row data for fuzzy matching
     activity_name = str(original_data.get('activity_name', '')).strip()
     
+    # FLOW 2: Relevance Gate (For Types 1, 2, 4)
+    if event_driven in (1, 2, 4):
+        logger.info(f"Executing Flow 2: PDF Relevance Check for '{activity_name}'")
+        is_relevant = ollama_client.check_pdf_relevance(pdf_text, activity_name)
+        
+        if not is_relevant:
+            logger.warning(f"FLOW 2 FAIL: PDF content not relevant to activity '{activity_name}'. Activating Kill Switch.")
+            submission.kill_switch = True
+            for rule_name, _ in PDF_RULES:
+                results.append(ValidationResult(
+                    criterion=rule_name,
+                    passed=False,
+                    points_awarded=0.0,
+                    message=f"REJECTED: PDF content irrelevant to activity '{activity_name}' (Flow 2 Fail)"
+                ))
+            return results
+    
     # =========================================================
     # SPECIAL CASE: event_driven=3 — strict validation flow
     # 1. Validate theme alignment (strict) → fail all if theme fails
@@ -428,14 +378,21 @@ def validate_pdf(submission: EventSubmission, ollama_client: OllamaClient) -> Li
         
         logger.info("Event driven 3: Theme alignment PASSED - proceeding to title check")
         
-        # Step 2: PDF title must match (using fuzzy matching with 60% threshold)
+        # Step 2: PDF title must match semantically
         rule_name, points = PDF_RULES[0]
-        title_match = _fuzzy_match_pdf_title(pdf_text, expected_title, activity_name) if expected_title else False
+        consistency = ollama_client.check_pdf_consistency(
+            pdf_text=pdf_text,
+            expected_title=expected_title,
+            expected_objectives=None,
+            expected_learning_outcomes=None,
+            expected_participants=None
+        )
+        title_match = consistency.get("title_match", False)
         results.append(ValidationResult(
             criterion=rule_name,
             passed=title_match,
             points_awarded=points if title_match else 0,
-            message="" if title_match else f"PDF title does not match expected: {expected_title}"
+            message="" if title_match else f"PDF title does not match expected semantically: {expected_title}"
         ))
         
         if not title_match:
@@ -472,16 +429,17 @@ def validate_pdf(submission: EventSubmission, ollama_client: OllamaClient) -> Li
         pdf_hash=pdf_hash
     )
     
-    # For non-event_driven=3 cases, do fuzzy title matching here
+    # For non-event_driven=3 cases, do semantic title matching here
     if event_driven != 3:
         # Rule 0: PDF title matches metadata (7 points)
         rule_name, points = PDF_RULES[0]
-        title_match = _fuzzy_match_pdf_title(pdf_text, expected_title, activity_name) if expected_title else False
+        # Use existing unified result for title match if available
+        title_match = validation_results.get("title_match", False)
         results.append(ValidationResult(
             criterion=rule_name,
             passed=title_match,
             points_awarded=points if title_match else 0,
-            message="" if title_match else f"PDF title does not match expected: {expected_title}"
+            message="" if title_match else f"PDF title does not match metadata semantically"
         ))
     
     # Rule 1: Expert details present (7 points)
