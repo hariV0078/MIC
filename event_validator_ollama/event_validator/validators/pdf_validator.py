@@ -329,6 +329,8 @@ def validate_pdf(submission: EventSubmission, ollama_client: OllamaClient) -> Li
         try: return int(float(str(raw).strip()))
         except: return None
         
+    # Get original row data (if stored on submission) for event_driven/activity_name lookups
+    original_data = getattr(submission, '_original_row_data', row_data)
     event_driven = _get_event_driven_id(original_data)
     
     # Get activity_name from original row data for fuzzy matching
