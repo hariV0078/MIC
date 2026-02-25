@@ -601,7 +601,7 @@ REASON: [Short 1-sentence explanation]
         cache_key = None
         if pdf_hash:
             cache_key = self._get_cache_key(
-                f"pdf_validation:{expected_title}:{expected_objectives}:{expected_learning_outcomes}:{expected_participants}",
+                f"pdf_validation:{expected_title}:{expected_objectives}:{expected_learning_outcomes}:{expected_participants or 15}",
                 model=self.text_model,
                 pdf_hash=pdf_hash
             )
@@ -642,7 +642,7 @@ Task: Validate ALL of the following in ONE analysis:
 2. Are expert details present? (Look for: expert name, designation, affiliation, speaker, facilitator, resource person, keynote speaker, presenter)
 3. Do the learning outcomes in the PDF align with the expected learning outcomes? (semantic alignment)
 4. Do the objectives in the PDF match the expected objectives? (semantic alignment)
-5. Does the PDF contain participant information indicating 15+ participants? (Look for participant count, attendance, number of attendees)
+5. Does the PDF contain participant information indicating {expected_participants or 15}+ participants? (Look for participant count, attendance, number of attendees)
 
 Respond in this EXACT format (one line per check):
 TITLE_MATCH: YES or NO
@@ -764,7 +764,7 @@ REASONING: <brief explanation of your findings>"""
             {{
                 "has_banner": true,
                 "is_real_event": true,
-                "has_15_plus_participants": true,
+                "has_15_plus_participants": true,  // Should be >= {expected_participants or 15}
                 "mode_match": true,
                 "description": "short description"
             }}"""

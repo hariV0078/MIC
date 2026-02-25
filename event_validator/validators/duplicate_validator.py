@@ -51,7 +51,7 @@ def validate_duplicate_detection(
         return ValidationResult(
             criterion=rule_name,
             passed=True,  # No images = no duplicates
-            points_awarded=points,
+            points_awarded=float(points),
             message=""
         )
     
@@ -195,7 +195,7 @@ def validate_duplicate_detection(
         return ValidationResult(
             criterion=rule_name,
             passed=False,
-            points_awarded=0,
+            points_awarded=0.0,
             message=message
         )
     else:
@@ -203,7 +203,7 @@ def validate_duplicate_detection(
         return ValidationResult(
             criterion=rule_name,
             passed=True,
-            points_awarded=points,
+            points_awarded=float(points),
             message=""
         )
 

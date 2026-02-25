@@ -56,7 +56,7 @@ def validate_duplicate_detection(
         return ValidationResult(
             criterion=rule_name,
             passed=True,  # No images = no duplicates
-            points_awarded=points,
+            points_awarded=float(points),
             message=""
         )
     
@@ -200,7 +200,7 @@ def validate_duplicate_detection(
         return ValidationResult(
             criterion=rule_name,
             passed=False,
-            points_awarded=0,
+            points_awarded=0.0,
             message=message
         )
     else:
@@ -208,7 +208,7 @@ def validate_duplicate_detection(
         return ValidationResult(
             criterion=rule_name,
             passed=True,
-            points_awarded=points,
+            points_awarded=float(points),
             message=""
         )
 
@@ -254,7 +254,7 @@ def validate_duplicate_title(
         return ValidationResult(
             criterion=rule_name,
             passed=True,
-            points_awarded=points,
+            points_awarded=float(points),
             message="Skipped: Missing user_id or activity_name"
         )
         
@@ -270,7 +270,7 @@ def validate_duplicate_title(
             return ValidationResult(
                 criterion=rule_name,
                 passed=True,
-                points_awarded=points,
+                points_awarded=float(points),
                 message=""
             )
             
@@ -278,7 +278,7 @@ def validate_duplicate_title(
         return ValidationResult(
             criterion=rule_name,
             passed=False,
-            points_awarded=-10,  # Negative points for failure
+            points_awarded=-10.0,  # Negative points for failure
             message=f"Duplicate title for same user (matches {previous_id})"
         )
     else:
@@ -289,7 +289,7 @@ def validate_duplicate_title(
         return ValidationResult(
             criterion=rule_name,
             passed=True,
-            points_awarded=points,
+            points_awarded=float(points),
             message=""
         )
 
@@ -312,7 +312,7 @@ def validate_duplicates(
     # 1. Duplicate Image Check
     img_result = validate_duplicate_detection(submission, config, submission_id)
     if not img_result.passed:
-        img_result.points_awarded = -10 # Explicitly set negative points for image fail
+        img_result.points_awarded = -10.0 # Explicitly set negative points for image fail
     results.append(img_result)
     
     # 2. Duplicate Title Check

@@ -258,9 +258,13 @@ Examples:
         
         print_section("Configuration")
         
-        # Prompt for input file path
-        input_csv_str = prompt_input("Enter the input CSV or Excel file path", file_type="file")
-        input_csv = Path(input_csv_str)
+        # Use positional argument if provided, otherwise prompt
+        if args.input_csv:
+            input_csv = Path(args.input_csv)
+            print_info(f"Using input file from argument: {input_csv}")
+        else:
+            input_csv_str = prompt_input("Enter the input CSV or Excel file path", file_type="file")
+            input_csv = Path(input_csv_str)
         
         # Use default output location (./outputs/)
         from datetime import datetime

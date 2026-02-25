@@ -25,7 +25,7 @@ def validate_pdf_title(
         return ValidationResult(
             criterion=rule_name,
             passed=False,
-            points_awarded=0,
+            points_awarded=0.0,
             message="No PDF text extracted"
         )
         
@@ -33,7 +33,7 @@ def validate_pdf_title(
         return ValidationResult(
             criterion=rule_name,
             passed=False,
-            points_awarded=0,
+            points_awarded=0.0,
             message="LLM not available for semantic title check"
         )
         
@@ -49,15 +49,15 @@ def validate_pdf_title(
         return ValidationResult(
             criterion=rule_name,
             passed=True,
-            points_awarded=points,
+            points_awarded=float(points),
             message="Title matched via semantic analysis"
         )
         
     return ValidationResult(
         criterion=rule_name,
         passed=False,
-        points_awarded=0,
-        message=f"PDF title does not match '{expected_title}'"
+        points_awarded=0.0,
+        message=f"PDF title does not match expected title: '{expected_title}'"
     )
 
 
@@ -87,10 +87,25 @@ def validate_pdf(
     expected_outcomes = row_data.get('Learning Outcomes', '')
     theme = row_data.get('Theme', '')
     
+    # Extract expected participants
+    expected_participants = None
+    try:
+        participants_str = str(row_data.get('Participants', '0')).strip()
+        expected_participants = int(float(participants_str))
+    except (ValueError, TypeError):
+        pass
+    
     # activity_name for relevance check
     original_data = getattr(submission, '_original_row_data', row_data)
     activity_name = original_data.get('activity_name', expected_title)
-    event_driven = original_data.get('event_driven')
+    
+    def _get_event_driven_id(data):
+        raw = data.get('event_driven') or data.get('Event Driven')
+        if raw is None: return None
+        try: return int(float(str(raw).strip()))
+        except: return None
+        
+    event_driven = _get_event_driven_id(original_data)
 
     if not pdf_text:
         # Fail all if no text
@@ -98,7 +113,7 @@ def validate_pdf(
             results.append(ValidationResult(
                 criterion=rule_name,
                 passed=False,
-                points_awarded=0,
+                points_awarded=0.0,
                 message="No PDF text extracted"
             ))
         # No text = Relevance failed
@@ -137,7 +152,7 @@ def validate_pdf(
         expected_title=expected_title,
         expected_objectives=expected_objectives,
         expected_learning_outcomes=expected_outcomes,
-        expected_participants=15, # We verify 15+ participants
+        expected_participants=expected_participants or 15, # Use dynamic threshold
         pdf_hash=pdf_hash
     )
     
@@ -149,8 +164,8 @@ def validate_pdf(
     results.append(ValidationResult(
         criterion=title_rule,
         passed=final_title_pass,
-        points_awarded=title_points if final_title_pass else 0,
-        message="" if final_title_pass else f"PDF title does not match expected title"
+        points_awarded=float(title_points) if final_title_pass else 0.0,
+        message="" if final_title_pass else f"PDF title match failed for expected: '{expected_title}'"
     ))
     
     # KILL SWITCH: If title doesn't match for types 1,2,4 → zero ALL remaining scores
@@ -162,7 +177,7 @@ def validate_pdf(
         results.append(ValidationResult(
             criterion=rule_name,
             passed=False,
-            points_awarded=0,
+            points_awarded=0.0,
             message="Kill switch: PDF title mismatch — expert score zeroed"
         ))
         # Zero out objectives/learning
@@ -170,7 +185,7 @@ def validate_pdf(
         results.append(ValidationResult(
             criterion=rule_name,
             passed=False,
-            points_awarded=0,
+            points_awarded=0.0,
             message="Kill switch: PDF title mismatch — objectives/learning score zeroed"
         ))
         # Zero remaining rules if they exist
@@ -179,7 +194,7 @@ def validate_pdf(
             results.append(ValidationResult(
                 criterion=rule_name,
                 passed=False,
-                points_awarded=0,
+                points_awarded=0.0,
                 message="Kill switch: PDF title mismatch — score zeroed"
             ))
         logger.info("Kill switch active: All PDF scores zeroed, theme+image will be zeroed by runner.")
@@ -187,42 +202,50 @@ def validate_pdf(
     
     # Rule 2: Expert Details
     rule_name, points = PDF_RULES[1]
-    passed = llm_results.get("expert_details_present", False)
+    expert_passed = llm_results.get("expert_details_present", False)
+    # DEPENDENCY: If title failed, expert score MUST be zero (as per user requirement)
+    final_expert_pass = expert_passed and final_title_pass
     results.append(ValidationResult(
         criterion=rule_name,
-        passed=passed,
-        points_awarded=points if passed else 0,
-        message="" if passed else "Expert/Speaker details missing"
+        passed=final_expert_pass,
+        points_awarded=float(points) if final_expert_pass else 0.0,
+        message="" if final_expert_pass else ("Expert/Speaker details missing" if final_title_pass else "Kill switch: PDF title mismatch — expert score zeroed")
     ))
     
     # Rule 3: Learning Outcomes
     rule_name, points = PDF_RULES[2]
-    passed = llm_results.get("learning_outcomes_align", False)
+    outcomes_passed = llm_results.get("learning_outcomes_align", False)
+    # DEPENDENCY: If title failed, score MUST be zero
+    final_outcomes_pass = outcomes_passed and final_title_pass
     results.append(ValidationResult(
         criterion=rule_name,
-        passed=passed,
-        points_awarded=points if passed else 0,
-        message="" if passed else "Learning outcomes do not align"
+        passed=final_outcomes_pass,
+        points_awarded=float(points) if final_outcomes_pass else 0.0,
+        message="" if final_outcomes_pass else ("Learning outcomes do not align" if final_title_pass else "Kill switch: PDF title mismatch — score zeroed")
     ))
     
     # Rule 4: Objectives
     rule_name, points = PDF_RULES[3]
-    passed = llm_results.get("objectives_match", False)
+    objectives_passed = llm_results.get("objectives_match", False)
+    # DEPENDENCY: If title failed, score MUST be zero
+    final_objectives_pass = objectives_passed and final_title_pass
     results.append(ValidationResult(
         criterion=rule_name,
-        passed=passed,
-        points_awarded=points if passed else 0,
-        message="" if passed else "Objectives do not match"
+        passed=final_objectives_pass,
+        points_awarded=float(points) if final_objectives_pass else 0.0,
+        message="" if final_objectives_pass else ("Objectives do not match" if final_title_pass else "Kill switch: PDF title mismatch — score zeroed")
     ))
     
     # Rule 5: Participants Count (PDF)
     rule_name, points = PDF_RULES[4]
-    passed = llm_results.get("participants_valid", False)
+    participants_passed = llm_results.get("participants_valid", False)
+    # DEPENDENCY: If title failed, score MUST be zero
+    final_participants_pass = participants_passed and final_title_pass
     results.append(ValidationResult(
         criterion=rule_name,
-        passed=passed,
-        points_awarded=points if passed else 0,
-        message="" if passed else "Participant count < 15 or missing in PDF"
+        passed=final_participants_pass,
+        points_awarded=float(points) if final_participants_pass else 0.0,
+        message="" if final_participants_pass else (f"Participant count < {expected_participants or 15} or missing in PDF" if final_title_pass else "Kill switch: PDF title mismatch — score zeroed")
     ))
     
     return results

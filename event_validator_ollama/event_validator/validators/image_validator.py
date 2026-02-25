@@ -24,7 +24,7 @@ def validate_geotag_present(
         return ValidationResult(
             criterion=rule_name,
             passed=False,
-            points_awarded=0,
+            points_awarded=0.0,
             message="No images provided"
         )
     
@@ -40,7 +40,7 @@ def validate_geotag_present(
         return ValidationResult(
             criterion=rule_name,
             passed=True,
-            points_awarded=points,
+            points_awarded=float(points),
             message="Visual geotag overlay detected"
         )
 
@@ -49,7 +49,7 @@ def validate_geotag_present(
         return ValidationResult(
             criterion=rule_name,
             passed=True,
-            points_awarded=points,
+            points_awarded=float(points),
             message=""
         )
     else:
@@ -62,7 +62,7 @@ def validate_geotag_present(
         return ValidationResult(
             criterion=rule_name,
             passed=False,
-            points_awarded=0,
+            points_awarded=0.0,
             message="No geotag found in any image"
         )
 
@@ -79,7 +79,7 @@ def validate_banner_poster_visible(
         return ValidationResult(
             criterion=rule_name,
             passed=False,
-            points_awarded=0,
+            points_awarded=0.0,
             message="No images provided"
         )
     
@@ -87,7 +87,7 @@ def validate_banner_poster_visible(
         return ValidationResult(
             criterion=rule_name,
             passed=False,
-            points_awarded=0,
+            points_awarded=0.0,
             message="Image analysis not provided"
         )
     
@@ -106,14 +106,14 @@ def validate_banner_poster_visible(
         return ValidationResult(
             criterion=rule_name,
             passed=True,
-            points_awarded=points,
+            points_awarded=float(points),
             message=""
         )
     else:
         return ValidationResult(
             criterion=rule_name,
             passed=False,
-            points_awarded=0,
+            points_awarded=0.0,
             message="Banner or poster not visible in images"
         )
 
@@ -129,7 +129,7 @@ def validate_real_activity_scene(
         return ValidationResult(
             criterion=rule_name,
             passed=False,
-            points_awarded=0,
+            points_awarded=0.0,
             message="No images provided"
         )
     
@@ -137,7 +137,7 @@ def validate_real_activity_scene(
         return ValidationResult(
             criterion=rule_name,
             passed=False,
-            points_awarded=0,
+            points_awarded=0.0,
             message="Image analysis not provided"
         )
     
@@ -145,14 +145,14 @@ def validate_real_activity_scene(
         return ValidationResult(
             criterion=rule_name,
             passed=True,
-            points_awarded=points,
+            points_awarded=float(points),
             message=""
         )
     else:
         return ValidationResult(
             criterion=rule_name,
             passed=False,
-            points_awarded=0,
+            points_awarded=0.0,
             message="Image does not depict a real event activity"
         )
 
@@ -168,7 +168,7 @@ def validate_15_plus_participants_visible(
         return ValidationResult(
             criterion=rule_name,
             passed=False,
-            points_awarded=0,
+            points_awarded=0.0,
             message="No images provided"
         )
     
@@ -176,7 +176,7 @@ def validate_15_plus_participants_visible(
         return ValidationResult(
             criterion=rule_name,
             passed=False,
-            points_awarded=0,
+            points_awarded=0.0,
             message="Image analysis not provided"
         )
     
@@ -184,14 +184,14 @@ def validate_15_plus_participants_visible(
         return ValidationResult(
             criterion=rule_name,
             passed=True,
-            points_awarded=points,
+            points_awarded=float(points),
             message=""
         )
     else:
         return ValidationResult(
             criterion=rule_name,
             passed=False,
-            points_awarded=0,
+            points_awarded=0.0,
             message="15+ participants not visible in images"
         )
 

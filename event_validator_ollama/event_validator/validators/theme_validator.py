@@ -57,7 +57,7 @@ def validate_theme_alignment(
         return ValidationResult(
             criterion=rule_name,
             passed=False,
-            points_awarded=0,
+            points_awarded=0.0,
             message="Theme missing — cannot validate alignment"
         )
     
@@ -90,7 +90,7 @@ def validate_theme_alignment(
         return ValidationResult(
             criterion=rule_name,
             passed=True,
-            points_awarded=points,
+            points_awarded=float(points),
             message=""
         )
     else:
@@ -111,7 +111,7 @@ def validate_theme_alignment(
         return ValidationResult(
             criterion=rule_name,
             passed=False,
-            points_awarded=0,
+            points_awarded=0.0,
             message=message
         )
 
@@ -138,7 +138,7 @@ def validate_level_duration(
         return ValidationResult(
             criterion=rule_name,
             passed=False,
-            points_awarded=0,
+            points_awarded=0.0,
             message=f"Duration missing/invalid. Duration: {duration}"
         )
     
@@ -158,7 +158,7 @@ def validate_level_duration(
             return ValidationResult(
                 criterion=rule_name,
                 passed=True,
-                points_awarded=points,
+                points_awarded=float(points),
                 message=f"Level auto-determined as {auto_determined_level} based on duration {duration_hours}h"
             )
         else:
@@ -166,7 +166,7 @@ def validate_level_duration(
             return ValidationResult(
                 criterion=rule_name,
                 passed=False,
-                points_awarded=0,
+                points_awarded=0.0,
                 message=f"Level missing and cannot be determined from duration {duration_hours}h"
             )
     
@@ -177,7 +177,7 @@ def validate_level_duration(
         return ValidationResult(
             criterion=rule_name,
             passed=False,
-            points_awarded=0,
+            points_awarded=0.0,
             message=f"Invalid level format: {level}"
         )
     
@@ -187,7 +187,7 @@ def validate_level_duration(
         return ValidationResult(
             criterion=rule_name,
             passed=False,
-            points_awarded=0,
+            points_awarded=0.0,
             message=f"Invalid level: {level}. Valid levels are 1-4."
         )
     
@@ -197,7 +197,7 @@ def validate_level_duration(
         return ValidationResult(
             criterion=rule_name,
             passed=True,
-            points_awarded=points,
+            points_awarded=float(points),
             message=""
         )
     else:
@@ -216,7 +216,7 @@ def validate_level_duration(
             return ValidationResult(
                 criterion=rule_name,
                 passed=True,
-                points_awarded=points,
+                points_awarded=float(points),
                 message=f"Level auto-corrected from {level} to {corrected_level} based on duration {duration_hours}h"
             )
         else:
@@ -232,7 +232,7 @@ def validate_level_duration(
             return ValidationResult(
                 criterion=rule_name,
                 passed=False,
-                points_awarded=0,
+                points_awarded=0.0,
                 message=f"Duration {duration_hours}h does not match Level {level} requirements ({expected_range})"
             )
 
@@ -264,7 +264,7 @@ def validate_participants_reported(
         return ValidationResult(
             criterion=rule_name,
             passed=True,
-            points_awarded=points,
+            points_awarded=float(points),
             message=""
         )
     else:
@@ -272,7 +272,7 @@ def validate_participants_reported(
         return ValidationResult(
             criterion=rule_name,
             passed=False,
-            points_awarded=0,
+            points_awarded=0.0,
             message=f"Participants reported: {participants} (needs >= 15)"
         )
 

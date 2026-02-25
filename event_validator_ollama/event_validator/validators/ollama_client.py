@@ -226,7 +226,7 @@ Task: Validate ALL of the following in ONE analysis:
 2. Are expert details present? (Look for: expert name, designation, affiliation, speaker, facilitator, resource person, keynote speaker, presenter)
 3. Do the objectives in the PDF align with the expected objectives? (semantic alignment)
 4. Do the learning outcomes in the PDF align with the expected learning outcomes? (semantic alignment)
-5. Does the PDF contain participant information indicating 15+ participants?
+5. Does the PDF contain participant information indicating {expected_participants if expected_participants else 15}+ participants?
 
 OUTPUT JSON ONLY:
 {{
@@ -300,7 +300,7 @@ OUTPUT JSON ONLY:
             CHECKLIST:
             1. Is there a banner or poster visible? (Yes/No)
             2. Is this a real event scene (people, interaction) or just a static object/screenshot? (Real/Fake)
-            3. Are there more than 15 participants visible? (Yes/No)
+            3. Are there more than {expected_participants if 'expected_participants' in locals() else 15} participants visible? (Yes/No)
             4. Does the scene match a '{event_mode}' event? (Yes/No)
             
             OUTPUT JSON ONLY (No markdown, no explanation outside JSON):

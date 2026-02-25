@@ -24,7 +24,7 @@ def validate_pdf_title_match(
         return ValidationResult(
             criterion=rule_name,
             passed=False,
-            points_awarded=0,
+            points_awarded=0.0,
             message="PDF text not extracted"
         )
     
@@ -41,14 +41,14 @@ def validate_pdf_title_match(
         return ValidationResult(
             criterion=rule_name,
             passed=True,
-            points_awarded=points,
+            points_awarded=float(points),
             message="Title matched via semantic analysis"
         )
     else:
         return ValidationResult(
             criterion=rule_name,
             passed=False,
-            points_awarded=0,
+            points_awarded=0.0,
             message=f"PDF title does not match expected title: {expected_title}"
         )
 
@@ -64,7 +64,7 @@ def validate_expert_details(
         return ValidationResult(
             criterion=rule_name,
             passed=False,
-            points_awarded=0,
+            points_awarded=0.0,
             message="PDF text not extracted"
         )
     
@@ -91,14 +91,14 @@ def validate_expert_details(
         return ValidationResult(
             criterion=rule_name,
             passed=True,
-            points_awarded=points,
+            points_awarded=float(points),
             message=""
         )
     else:
         return ValidationResult(
             criterion=rule_name,
             passed=False,
-            points_awarded=0,
+            points_awarded=0.0,
             message="Expert details not found in PDF"
         )
 
@@ -119,7 +119,7 @@ def validate_objectives_learning_align(
         return ValidationResult(
             criterion=rule_name,
             passed=False,
-            points_awarded=0,
+            points_awarded=0.0,
             message="PDF text not extracted"
         )
     
@@ -137,14 +137,14 @@ def validate_objectives_learning_align(
         return ValidationResult(
             criterion=rule_name,
             passed=True,
-            points_awarded=points,
+            points_awarded=float(points),
             message=""
         )
     else:
         return ValidationResult(
             criterion=rule_name,
             passed=False,
-            points_awarded=0,
+            points_awarded=0.0,
             message="Objectives/Learning outcomes in PDF do not align with expected values"
         )
 
@@ -163,7 +163,7 @@ def validate_objectives_match(
         return ValidationResult(
             criterion=rule_name,
             passed=False,
-            points_awarded=0,
+            points_awarded=0.0,
             message="PDF text not extracted"
         )
     
@@ -180,14 +180,14 @@ def validate_objectives_match(
         return ValidationResult(
             criterion=rule_name,
             passed=True,
-            points_awarded=points,
+            points_awarded=float(points),
             message=""
         )
     else:
         return ValidationResult(
             criterion=rule_name,
             passed=False,
-            points_awarded=0,
+            points_awarded=0.0,
             message="Objectives in PDF do not match expected objectives"
         )
 
@@ -211,7 +211,7 @@ def validate_participant_info_match(
         return ValidationResult(
             criterion=rule_name,
             passed=False,
-            points_awarded=0,
+            points_awarded=0.0,
             message="PDF text not extracted"
         )
     
@@ -228,14 +228,14 @@ def validate_participant_info_match(
         return ValidationResult(
             criterion=rule_name,
             passed=True,
-            points_awarded=points,
+            points_awarded=float(points),
             message=""
         )
     else:
         return ValidationResult(
             criterion=rule_name,
             passed=False,
-            points_awarded=0,
+            points_awarded=0.0,
             message=f"PDF participant information does not match expected (needs 15+ participants)"
         )
 
@@ -279,7 +279,7 @@ def validate_pdf(submission: EventSubmission, ollama_client: OllamaClient) -> Li
             results.append(ValidationResult(
                 criterion=rule_name,
                 passed=True,
-                points_awarded=points,
+                points_awarded=float(points),
                 message="MIC event - PDF validation auto-accepted"
             ))
         return results
@@ -291,7 +291,7 @@ def validate_pdf(submission: EventSubmission, ollama_client: OllamaClient) -> Li
             results.append(ValidationResult(
                 criterion=rule_name,
                 passed=False,
-                points_awarded=0,
+                points_awarded=0.0,
                 message="PDF text not extracted"
             ))
         return results
@@ -323,12 +323,13 @@ def validate_pdf(submission: EventSubmission, ollama_client: OllamaClient) -> Li
     ])
     
     # Get event_driven for special handling
-    original_data = getattr(submission, '_original_row_data', row_data)
-    event_driven = original_data.get('event_driven')
-    try:
-        event_driven = int(event_driven) if event_driven is not None else None
-    except (ValueError, TypeError):
-        event_driven = None
+    def _get_event_driven_id(data):
+        raw = data.get('event_driven') or data.get('Event Driven')
+        if raw is None: return None
+        try: return int(float(str(raw).strip()))
+        except: return None
+        
+    event_driven = _get_event_driven_id(original_data)
     
     # Get activity_name from original row data for fuzzy matching
     activity_name = str(original_data.get('activity_name', '')).strip()
@@ -373,8 +374,8 @@ def validate_pdf(submission: EventSubmission, ollama_client: OllamaClient) -> Li
                 results.append(ValidationResult(
                     criterion=rule_name,
                     passed=False,
-                    points_awarded=0,
-                    message="Theme alignment failed - all PDF validations failed for event_driven=3"
+                    points_awarded=0.0,
+                    message="Theme alignment failed - This submission requires strict theme matching (Event Driven 3)."
                 ))
             return results
         
@@ -393,8 +394,8 @@ def validate_pdf(submission: EventSubmission, ollama_client: OllamaClient) -> Li
         results.append(ValidationResult(
             criterion=rule_name,
             passed=title_match,
-            points_awarded=points if title_match else 0,
-            message="" if title_match else f"PDF title does not match expected semantically: {expected_title}"
+            points_awarded=float(points) if title_match else 0.0,
+            message="" if title_match else f"PDF title mismatch - semantic match not found for: {expected_title} (Event Driven 3)."
         ))
         
         if not title_match:
@@ -404,16 +405,16 @@ def validate_pdf(submission: EventSubmission, ollama_client: OllamaClient) -> Li
             results.append(ValidationResult(
                 criterion=rule_name,
                 passed=False,
-                points_awarded=0,
-                message="PDF title mismatch - all PDF validations failed for event_driven=3"
+                points_awarded=0.0,
+                message="PDF title mismatch - skipping expert details check (Event Driven 3)."
             ))
             # Rule 2: Objectives and learning align - FAIL
             rule_name, points = PDF_RULES[2]
             results.append(ValidationResult(
                 criterion=rule_name,
                 passed=False,
-                points_awarded=0,
-                message="PDF title mismatch - all PDF validations failed for event_driven=3"
+                points_awarded=0.0,
+                message="PDF title mismatch - skipping objectives/learning check (Event Driven 3)."
             ))
             return results
         
@@ -440,8 +441,8 @@ def validate_pdf(submission: EventSubmission, ollama_client: OllamaClient) -> Li
         results.append(ValidationResult(
             criterion=rule_name,
             passed=title_match,
-            points_awarded=points if title_match else 0,
-            message="" if title_match else f"PDF title does not match expected title"
+            points_awarded=float(points) if title_match else 0.0,
+            message="" if title_match else f"PDF title does not match expected title: {expected_title}"
         ))
         
         # KILL SWITCH: If title doesn't match for types 1,2,4 → zero ALL remaining scores
@@ -453,7 +454,7 @@ def validate_pdf(submission: EventSubmission, ollama_client: OllamaClient) -> Li
             results.append(ValidationResult(
                 criterion=rule_name,
                 passed=False,
-                points_awarded=0,
+                points_awarded=0.0,
                 message="Kill switch: PDF title mismatch — expert score zeroed"
             ))
             # Zero out objectives/learning (Rule 2)
@@ -461,7 +462,7 @@ def validate_pdf(submission: EventSubmission, ollama_client: OllamaClient) -> Li
             results.append(ValidationResult(
                 criterion=rule_name,
                 passed=False,
-                points_awarded=0,
+                points_awarded=0.0,
                 message="Kill switch: PDF title mismatch — objectives/learning score zeroed"
             ))
             logger.info("Kill switch active: All PDF scores zeroed, theme+image will be zeroed by runner.")
@@ -471,11 +472,15 @@ def validate_pdf(submission: EventSubmission, ollama_client: OllamaClient) -> Li
     # Use heuristic check first, then AI result
     rule_name, points = PDF_RULES[1]
     expert_passed = validation_results.get("expert_details_present", False) or has_expert_keywords
+    
+    # DEPENDENCY: If title failed, expert score MUST be zero (as per user requirement)
+    final_expert_pass = expert_passed and title_match
+    
     results.append(ValidationResult(
         criterion=rule_name,
-        passed=expert_passed,
-        points_awarded=points if expert_passed else 0,
-        message="" if expert_passed else "Expert details not found in PDF"
+        passed=final_expert_pass,
+        points_awarded=float(points) if final_expert_pass else 0.0,
+        message="" if final_expert_pass else ("Expert/Speaker details not found in PDF" if title_match else "Kill switch: PDF title mismatch — expert score zeroed")
     ))
     
     # Rule 2: Objectives and learning align (6 points)
@@ -484,14 +489,14 @@ def validate_pdf(submission: EventSubmission, ollama_client: OllamaClient) -> Li
     # Check both learning_match AND objectives_match from unified result
     learning_passed = validation_results.get("learning_match", False) or validation_results.get("objectives_match", False)
     
-    # If title failed (event_driven=3 case), this fails too
-    final_pass = learning_passed and title_match
+    # DEPENDENCY: If title failed, objectives score MUST be zero
+    final_learning_pass = learning_passed and title_match
     
     results.append(ValidationResult(
         criterion=rule_name,
-        passed=final_pass,
-        points_awarded=points if final_pass else 0,
-        message="" if final_pass else ("Objectives/Learning outcomes not clearly stated/aligned in PDF" if title_match else "PDF title mismatch - objectives/learning validation failed")
+        passed=final_learning_pass,
+        points_awarded=float(points) if final_learning_pass else 0.0,
+        message="" if final_learning_pass else ("Objectives/Learning outcomes not clearly stated/aligned in PDF" if title_match else "PDF title mismatch - objectives/learning validation failed")
     ))
     
     logger.debug(f"PDF validation complete. Reasoning: {validation_results.get('reasoning', 'N/A')}")

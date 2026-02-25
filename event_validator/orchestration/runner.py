@@ -79,11 +79,9 @@ def _add_score_breakdown_to_row(enriched_row: dict, all_results: List[Validation
     for result in all_results:
         column_name = _get_score_column_name(result.criterion)
         max_points = all_rules_dict.get(result.criterion, result.points_awarded)
-        # Format: "2.0/2" or "0/7" (no .0 for zero)
-        if result.points_awarded == 0:
-            enriched_row[column_name] = f"0/{max_points}"
-        else:
-            enriched_row[column_name] = f"{result.points_awarded}.0/{max_points}"
+        # Consistently format as X.0/Max (e.g., 2.0/2 or 0.0/7)
+        points = float(result.points_awarded)
+        enriched_row[column_name] = f"{points:.1f}/{max_points}"
     
     return enriched_row
 
@@ -171,8 +169,14 @@ def process_submission(
     submission._original_row_data = row_data  # Store original for output
     
     # Get event_driven and academic_year for URL resolution
+    def _get_event_driven_id(data):
+        raw = data.get('event_driven') or data.get('Event Driven')
+        if raw is None: return None
+        try: return int(float(str(raw).strip()))
+        except: return None
+        
     original_data = getattr(submission, '_original_row_data', row_data)
-    event_driven = original_data.get('event_driven')
+    event_driven = _get_event_driven_id(original_data)
     academic_year = original_data.get('acadmic_year') or original_data.get('financial_year')
     
     # Extract PDF data (MANDATORY)
@@ -286,13 +290,13 @@ def process_submission(
     logger.info("=" * 80)
     
     # Initialize scoring variables (must be set even if validations are skipped)
-    theme_points = 0
+    theme_points = 0.0
     theme_results = []
-    pdf_points = 0
+    pdf_points = 0.0
     pdf_results = []
-    image_points = 0
+    image_points = 0.0
     image_results = []
-    duplicate_points = 0
+    duplicate_points = 0.0
     duplicate_results = []
     
     # Removed stagger delay - rate limiter handles spacing automatically
@@ -312,7 +316,7 @@ def process_submission(
         theme_results = [ValidationResult(
             criterion=rule_name,
             passed=False,
-            points_awarded=0,
+            points_awarded=0.0,
             message="Theme validation skipped: API call budget exhausted"
         )]
     else:
@@ -347,7 +351,7 @@ def process_submission(
                 pdf_results.append(ValidationResult(
                     criterion=rule_name,
                     passed=False,
-                    points_awarded=0,
+                    points_awarded=0.0,
                     message="PDF validation skipped: API call budget exhausted"
                 ))
         else:
@@ -374,7 +378,7 @@ def process_submission(
         missing_pdf_result = ValidationResult(
             criterion="PDF Validation",
             passed=False,
-            points_awarded=0,
+            points_awarded=0.0,
             message="PDF file missing or could not be downloaded"
         )
         pdf_results = [missing_pdf_result]
@@ -404,12 +408,17 @@ def process_submission(
             theme_results.append(ValidationResult(
                 criterion=rule_name,
                 passed=False,
-                points_awarded=0,
+                points_awarded=0.0,
                 message="Kill switch active: PDF content irrelevant to activity (Flow 2 Fail)"
             ))
         all_results.extend(theme_results)
-        theme_points = 0
-        logger.info(f"Theme scores zeroed: 0/{len(THEME_RULES)} passed | Points: 0")
+        theme_points = 0.0
+        
+        # Recalculate pdf_points if they were changed by pdf_validator
+        pdf_points = sum(r.points_awarded for r in pdf_results)
+        
+        image_points = 0.0  # CRITICAL: Also update local image_points variable
+        logger.info(f"Theme scores zeroed: 0/{len(THEME_RULES)} passed | Points: 0.0")
         
         # Zero out image scores: skip analysis entirely
         image_results = []
@@ -417,7 +426,7 @@ def process_submission(
             image_results.append(ValidationResult(
                 criterion=rule_name,
                 passed=False,
-                points_awarded=0,
+                points_awarded=0.0,
                 message="Kill switch active: Image analysis skipped (Flow 2 Fail)"
             ))
         all_results.extend(image_results)
@@ -439,7 +448,7 @@ def process_submission(
                     image_results.append(ValidationResult(
                         criterion=rule_name,
                         passed=False,
-                        points_awarded=0,
+                        points_awarded=0.0,
                         message="Image validation skipped: API call budget exhausted"
                     ))
             else:
@@ -464,7 +473,7 @@ def process_submission(
             missing_image_result = ValidationResult(
                 criterion="Image Validation",
                 passed=False,
-                points_awarded=0,
+                points_awarded=0.0,
                 message="Event photos missing or invalid"
             )
             image_results = [missing_image_result]
@@ -478,7 +487,21 @@ def process_submission(
     logger.info("─" * 80)
     logger.info("DUPLICATE VALIDATION (15 points total)")
     logger.info("─" * 80)
-    duplicate_results = validate_duplicates(submission, config, submission_id)
+    
+    if submission.kill_switch:
+        logger.warning("Kill switch active: Skipping duplicate validation analysis")
+        from event_validator.config.rules import SIMILARITY_RULES
+        duplicate_results = []
+        for rule_name, points in SIMILARITY_RULES:
+            duplicate_results.append(ValidationResult(
+                criterion=rule_name,
+                passed=False,
+                points_awarded=0.0,
+                message="Kill switch active: Duplicate validation skipped"
+            ))
+    else:
+        duplicate_results = validate_duplicates(submission, config, submission_id)
+        
     all_results.extend(duplicate_results)
     
     # Log duplicate validation results
@@ -566,10 +589,10 @@ def process_submission(
             criterion = result.criterion
             
             # Remove rule name prefix if present (e.g., "PDF title matches metadata: Title not found" -> "Title not found")
-            if message:
-                # Check if message starts with criterion name
+            # If the validator provided a specific detailed message, use it
+            if message and len(message) > 5:
+                # If it starts with the criterion, strip it to avoid "Title: Title not found"
                 if message.lower().startswith(criterion.lower()):
-                    # Remove the prefix
                     remaining = message[len(criterion):].strip()
                     if remaining.startswith(":"):
                         remaining = remaining[1:].strip()
@@ -714,6 +737,12 @@ def process_csv(
     
     if not gemini_client.client:
         logger.warning("Gemini client not initialized. Some validations may fail.")
+    
+    # Initialize OCR reader in the main thread to avoid [Errno 5] I/O errors 
+    # occurring due to hardware initialization in child threads on Linux/Ubuntu.
+    from event_validator.utils.ocr import get_reader
+    logger.info("Initializing OCR infrastructure...")
+    get_reader()
     
     # Read input file (CSV or Excel)
     if not input_csv_path.exists():

@@ -21,16 +21,44 @@ def get_reader():
         
         try:
             import easyocr
-            # Initialize reader with English model
-            # gpu=False to save VRAM/resources
-            print("⏳ Loading EasyOCR reader for the first time (CPU mode)...")
-            _reader = easyocr.Reader(['en'], gpu=False, verbose=False)
-            return _reader
+            import os
+            
+            # Check for explicit GPU disabling via environment variable
+            use_gpu = os.getenv("USE_GPU", "1") != "0"
+            
+            # Auto-detect CUDA availability if GPU is requested
+            if use_gpu:
+                try:
+                    import torch
+                    if not torch.cuda.is_available():
+                        logger.warning("GPU requested but CUDA is not available. Falling back to CPU.")
+                        use_gpu = False
+                except ImportError:
+                    logger.warning("GPU requested but torch not found. Falling back to CPU.")
+                    use_gpu = False
+            
+            # Initialize reader
+            if use_gpu:
+                logger.info("⏳ Loading EasyOCR reader (GPU mode)...")
+            else:
+                logger.info("⏳ Loading EasyOCR reader (CPU mode)...")
+                
+            try:
+                _reader = easyocr.Reader(['en'], gpu=use_gpu, verbose=False)
+                return _reader
+            except Exception as e:
+                if use_gpu:
+                    logger.warning(f"EasyOCR failed to load in GPU mode: {e}. Falling back to CPU...")
+                    _reader = easyocr.Reader(['en'], gpu=False, verbose=False)
+                    return _reader
+                else:
+                    raise e
+                    
         except ImportError:
-            print("❌ ERROR: EasyOCR is not installed. Run: pip install easyocr")
+            logger.error("❌ ERROR: EasyOCR is not installed. Run: pip install easyocr")
             return None
         except Exception as e:
-            print(f"❌ ERROR: EasyOCR failed to load. Reason: {e}")
+            logger.error(f"❌ ERROR: EasyOCR failed to load. Reason: {e}")
             return None
 
 def extract_visual_geotag(image_path: str) -> Tuple[bool, str]:
