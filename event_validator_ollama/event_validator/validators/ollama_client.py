@@ -70,8 +70,37 @@ class OllamaClient:
 
     def check_iic_alignment(self, title: str, objectives: str = "", learning_outcomes: str = "", theme: str = "") -> tuple[bool, str]:
         """
-        REDEFINED: Purely semantic check using LLM. Redundant Python filters removed.
+        REDEFINED: Semantic check using LLM with rule-based fast-pass for MIC standard events.
         """
+        # --- Rule-Based Fast-Pass ---
+        title_lower = (title or "").lower()
+        theme_lower = (theme or "").lower()
+        
+        # 1. Direct Theme Match in Title
+        if theme_lower and theme_lower != "none" and theme_lower in title_lower:
+            return True, "Rule-based: Theme explicitly mentioned in title"
+            
+        # 2. Known Predefined MIC Activities Mapping
+        mic_keywords = [
+            "motivational session by successful", "exposure and field visit", 
+            "field/exposure visit to pre-incubation", "problem solving and ideation",
+            "workshop on design thinking", "critical thinking and innovation", 
+            "basics of intellectual property rights", "idea showcase: demo day",
+            "poster presentation of ideas", "innovation showcase",
+            "competition/challenge/ hackathon", "competition/challenge/hackathon", 
+            "yukti innovation repository", "effective sales and marketing strategies",
+            "entrepreneurship and innovation as career opportunity",
+            "from idea to impact", "my story - motivational session"
+        ]
+        
+        if any(kw in title_lower for kw in mic_keywords):
+            return True, "Rule-based: Predefined MIC canonical activity detected in title"
+            
+        # Additional broad keywords that represent valid IIC events
+        broad_keywords = ["hackathon", "ideathon", "yukti", "demo day", "business plan", "startup", "entrepreneurship", "incubation", "intellectual property", "ipr", "design thinking"]
+        if any(kw in title_lower for kw in broad_keywords):
+            return True, "Rule-based: IIC specific keyword detected in title"
+
         # LLM Semantic Check (Flow 1)
         prompt = f"""You are a strict Innovation Auditor.
         Determine if the following Event Activity is a VALID Innovation/Design Thinking/Entrepreneurship initiative.
