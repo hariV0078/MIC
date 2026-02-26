@@ -16,9 +16,22 @@ def setup_logging(log_level: str = "INFO", log_file: Optional[Path] = None):
     # Root logger
     logger = logging.getLogger()
     logger.setLevel(getattr(logging, log_level.upper()))
-    
-    # Console handler
-    console_handler = logging.StreamHandler(sys.stdout)
+    class SafeStreamHandler(logging.StreamHandler):
+        """A StreamHandler that gracefully ignores [Errno 5] Input/output error on Ubuntu/Linux."""
+        def emit(self, record):
+            try:
+                super().emit(record)
+            except OSError as e:
+                # 5 is EIO (Input/output error)
+                if e.errno == 5:
+                    pass
+                else:
+                    raise
+            except Exception:
+                self.handleError(record)
+
+    # Console handler using safe EIO stream
+    console_handler = SafeStreamHandler(sys.stdout)
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
     

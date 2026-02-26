@@ -89,5 +89,5 @@ def extract_visual_geotag(image_path: str) -> Tuple[bool, str]:
         
         return False, full_text
     except Exception as e:
-        print(f"❌ EasyOCR error on {image_path}: {e}")
+        logger.error(f"❌ EasyOCR error on {image_path}: {e}")
         return False, ""

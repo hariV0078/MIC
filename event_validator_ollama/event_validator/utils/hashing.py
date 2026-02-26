@@ -49,12 +49,13 @@ def compute_phash(file_path: Union[Path, io.BytesIO]) -> Optional[str]:
     try:
         if isinstance(file_path, io.BytesIO):
             file_path.seek(0)
-            img = Image.open(file_path)
+            with Image.open(file_path) as img:
+                phash = imagehash.phash(img)
             file_path.seek(0)  # Reset for potential reuse
         else:
-            img = Image.open(file_path)
+            with Image.open(file_path) as img:
+                phash = imagehash.phash(img)
         
-        phash = imagehash.phash(img)
         return str(phash)
     except Exception as e:
         logger.error(f"Error computing pHash: {e}")

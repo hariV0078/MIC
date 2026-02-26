@@ -67,39 +67,39 @@ def _download_file_single(url: str, timeout: int = 30) -> Optional[Path]:
     try:
         logger.debug(f"Attempting download from URL: {url}")
         
-        # Download file
-        response = requests.get(url, timeout=timeout, stream=True)
-        response.raise_for_status()
-        
-        # Create filename from URL
-        parsed_url = urlparse(url)
-        url_path = Path(parsed_url.path)
-        filename = url_path.name or "downloaded_file"
-        
-        # If filename is empty or generic, use hash of URL
-        if not filename or filename == "downloaded_file":
-            import hashlib
-            url_hash = hashlib.md5(url.encode()).hexdigest()[:8]
-            file_extension = url_path.suffix or '.tmp'
-            filename = f"event_validator_{url_hash}{file_extension}"
-        
-        # Ensure unique filename in download directory
-        download_path = DOWNLOAD_DIR / filename
-        counter = 1
-        while download_path.exists():
-            stem = download_path.stem
-            suffix = download_path.suffix
-            download_path = DOWNLOAD_DIR / f"{stem}_{counter}{suffix}"
-            counter += 1
-        
-        # Download and save file
-        with open(download_path, 'wb') as f:
-            for chunk in response.iter_content(chunk_size=8192):
-                if chunk:
-                    f.write(chunk)
-        
-        logger.debug(f"Successfully downloaded file to: {download_path}")
-        return download_path
+        # Download file with stream context manager to ensure connection is closed
+        with requests.get(url, timeout=timeout, stream=True) as response:
+            response.raise_for_status()
+            
+            # Create filename from URL
+            parsed_url = urlparse(url)
+            url_path = Path(parsed_url.path)
+            filename = url_path.name or "downloaded_file"
+            
+            # If filename is empty or generic, use hash of URL
+            if not filename or filename == "downloaded_file":
+                import hashlib
+                url_hash = hashlib.md5(url.encode()).hexdigest()[:8]
+                file_extension = url_path.suffix or '.tmp'
+                filename = f"event_validator_{url_hash}{file_extension}"
+            
+            # Ensure unique filename in download directory
+            download_path = DOWNLOAD_DIR / filename
+            counter = 1
+            while download_path.exists():
+                stem = download_path.stem
+                suffix = download_path.suffix
+                download_path = DOWNLOAD_DIR / f"{stem}_{counter}{suffix}"
+                counter += 1
+            
+            # Download and save file
+            with open(download_path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+            
+            logger.debug(f"Successfully downloaded file to: {download_path}")
+            return download_path
         
     except requests.exceptions.HTTPError as e:
         if e.response and e.response.status_code == 404:

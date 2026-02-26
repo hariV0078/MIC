@@ -100,6 +100,14 @@ async def startup_event():
     deleted = cleanup_old_files()
     if deleted > 0:
         logger.info(f"Startup cleanup: Deleted {deleted} old file(s)")
+        
+    # Initialize OCR in the main thread to avoid [Errno 5] I/O errors in child threads
+    try:
+        from event_validator.utils.ocr import get_reader
+        logger.info("Initializing OCR infrastructure...")
+        get_reader()
+    except Exception as e:
+        logger.error(f"Failed to initialize OCR on startup: {e}")
     
     logger.info("Application startup complete")
 
@@ -319,7 +327,7 @@ async def validate_batch(
                     try:
                         logger.info(f"Processing submission {row_index + 1}/{len(submissions)}")
                         # No fixed delay - rate limiter handles timing automatically
-                        submission = process_submission(row_data, config, gemini_client)
+                        submission = process_submission(row_data, config, ollama_client)
                         
                         # Create result row (use original row data if available)
                         result_row = getattr(submission, '_original_row_data', row_data).copy()

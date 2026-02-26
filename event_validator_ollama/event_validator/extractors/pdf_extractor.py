@@ -50,22 +50,24 @@ def _extract_with_pypdf(pdf_path: Path) -> tuple[str, dict]:
     if not PYPDF_AVAILABLE:
         return "", {}
     try:
-        reader = pypdf.PdfReader(str(pdf_path))
-        parts = []
-        for page in reader.pages:
+        # Open the file explicitly and close it
+        with open(pdf_path, 'rb') as f:
+            reader = pypdf.PdfReader(f)
+            parts = []
+            for page in reader.pages:
+                try:
+                    page_text = page.extract_text()
+                    if page_text and page_text.strip():
+                        parts.append(page_text.strip())
+                except Exception:
+                    continue
+            metadata = {}
             try:
-                page_text = page.extract_text()
-                if page_text and page_text.strip():
-                    parts.append(page_text.strip())
+                if reader.metadata:
+                    metadata = {k: str(v) for k, v in reader.metadata.items() if k and v}
             except Exception:
-                continue
-        metadata = {}
-        try:
-            if reader.metadata:
-                metadata = {k: str(v) for k, v in reader.metadata.items() if k and v}
-        except Exception:
-            pass
-        return "\n".join(parts), metadata
+                pass
+            return "\n".join(parts), metadata
     except Exception as e:
         logger.debug(f"pypdf failed for {pdf_path.name}: {e}")
         return "", {}
@@ -132,15 +134,15 @@ def _extract_with_easyocr(pdf_path: Path) -> str:
         if found:
             POPPLER_DIR = os.path.dirname(found)
 
-    print(f"\n🔄 Running OCR Fallback on {pdf_path.name}...")
+    logger.info(f"\n🔄 Running OCR Fallback on {pdf_path.name}...")
     if os.path.exists(POPPLER_DIR):
-        print(f"    [Poppler] Using binaries from: {POPPLER_DIR}")
+        logger.info(f"    [Poppler] Using binaries from: {POPPLER_DIR}")
     else:
-        print(f"    [Poppler] WARNING: No Poppler path found. Falling back to system PATH.")
+        logger.warning(f"    [Poppler] WARNING: No Poppler path found. Falling back to system PATH.")
     
     try:
         if not PDF2IMAGE_AVAILABLE:
-            print(f"❌ ERROR: pdf2image library not found. OCR cannot run.")
+            logger.error(f"❌ ERROR: pdf2image library not found. OCR cannot run.")
             return ""
 
         from event_validator.utils.ocr import get_reader
@@ -150,7 +152,7 @@ def _extract_with_easyocr(pdf_path: Path) -> str:
 
         # Convert PDF to images using the explicit Poppler path
         # OPTIMIZED: 150 DPI and limit to first 5 pages for speed
-        print(f"    [OCR] Converting PDF to images (dpi=150, limit=5 pages)...")
+        logger.info(f"    [OCR] Converting PDF to images (dpi=150, limit=5 pages)...")
         images = convert_from_path(
             str(pdf_path), 
             dpi=150, 
@@ -159,23 +161,30 @@ def _extract_with_easyocr(pdf_path: Path) -> str:
         )
         
         if not images:
-            print(f"    [OCR] WARNING: No images generated from PDF. Poppler might be failing.")
+            logger.warning(f"    [OCR] WARNING: No images generated from PDF. Poppler might be failing.")
             return ""
 
-        print(f"    [OCR] Generated {len(images)} images. Running OCR on each page...")
+        logger.info(f"    [OCR] Generated {len(images)} images. Running OCR on each page...")
         parts = []
         for i, img in enumerate(images, 1):
-            print(f"    [OCR] Processing page {i}/{len(images)}...")
+            logger.info(f"    [OCR] Processing page {i}/{len(images)}...")
             img_array = np.array(img)
             result = reader.readtext(img_array, detail=0)
             page_text = " ".join(result).strip()
             if page_text:
                 parts.append(page_text)
+            # Explicitly close the PIL Image to prevent file descriptor leaks
+            if hasattr(img, 'close'):
+                img.close()
+                
+        # Force garbage collection
+        import gc
+        gc.collect()
                 
         return "\n".join(parts)
 
     except Exception as e:
-        print(f"\n🚨 OCR CRASHED ON {pdf_path.name}:\n{str(e)}\n")
+        logger.error(f"\n🚨 OCR CRASHED ON {pdf_path.name}:\n{str(e)}\n")
         return ""
 
 
@@ -226,39 +235,39 @@ def extract_pdf_text(file_path: Path) -> Optional[PDFData]:
     method = "none"
 
     # --- Layer 1: pypdf ---
-    print(f"🔎 [DEBUG] Layer 1 (pypdf) starting for: {file_path.name}")
+    logger.debug(f"🔎 Layer 1 (pypdf) starting for: {file_path.name}")
     text, metadata = _extract_with_pypdf(file_path)
     if text.strip():
-        print(f"✅ [DEBUG] Layer 1 (pypdf) SUCCESS: Extracted {len(text)} chars")
+        logger.debug(f"✅ Layer 1 (pypdf) SUCCESS: Extracted {len(text)} chars")
         method = "pypdf"
 
     # --- Layer 2: pdfplumber ---
     if not text.strip():
-        print(f"🔎 [DEBUG] Layer 2 (pdfplumber) starting for: {file_path.name}")
+        logger.debug(f"🔎 Layer 2 (pdfplumber) starting for: {file_path.name}")
         text, meta2 = _extract_with_pdfplumber(file_path)
         if text.strip():
-            print(f"✅ [DEBUG] Layer 2 (pdfplumber) SUCCESS: Extracted {len(text)} chars")
+            logger.debug(f"✅ Layer 2 (pdfplumber) SUCCESS: Extracted {len(text)} chars")
             method = "pdfplumber"
         if not metadata and meta2:
             metadata = meta2
 
     # --- Layer 3: EasyOCR ---
     if not text.strip():
-        print(f"🔎 [DEBUG] Layer 3 (EasyOCR) target check: DISABLE_PDF_OCR={os.environ.get('DISABLE_PDF_OCR')}")
+        logger.debug(f"🔎 Layer 3 (EasyOCR) target check: DISABLE_PDF_OCR={os.environ.get('DISABLE_PDF_OCR')}")
         if os.environ.get("DISABLE_PDF_OCR") == "1":
             logger.info(f"Skipping OCR layer for {file_path.name} (DISABLE_PDF_OCR=1)")
         else:
             logger.info(f"PDF Layer 3 (EasyOCR): {file_path.name} — text PDFs failed, trying OCR")
             text = _extract_with_easyocr(file_path)
             if text.strip():
-                print(f"✅ [DEBUG] Layer 3 (EasyOCR) SUCCESS: Extracted {len(text)} chars")
+                logger.debug(f"✅ Layer 3 (EasyOCR) SUCCESS: Extracted {len(text)} chars")
         if text.strip():
             method = "easyocr"
     else:
-        print(f"⏭️ [DEBUG] Skipping Layer 3 (OCR) because text is already present.")
+        logger.debug(f"⏭️ Skipping Layer 3 (OCR) because text is already present.")
 
     if not text.strip():
-        print(f"❌ [DEBUG] ALL PDF EXTRACTION LAYERS FAILED for: {file_path.name}")
+        logger.error(f"❌ ALL PDF EXTRACTION LAYERS FAILED for: {file_path.name}")
 
     # Get page count (best-effort)
     num_pages = 0

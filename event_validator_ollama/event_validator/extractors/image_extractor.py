@@ -27,73 +27,70 @@ def extract_image_metadata(image_path: Path) -> ImageData:
     
     if Image is not None:
         try:
-            img = Image.open(image_path)
-            
-            # OPTIMIZATION: Aggressive Resize for Speed (Moondream/Edge Models)
-            # 1024px is optimal for moondream/llava-Next and significantly faster than 1920px/4K
-            max_dimension = 1024
-            if max(img.size) > max_dimension:
-                # Calculate new size preserving aspect ratio
-                ratio = max_dimension / max(img.size)
-                new_size = (int(img.width * ratio), int(img.height * ratio))
-                logger.debug(f"  Resizing image {image_path.name} from {img.size} to {new_size} for speed optimization")
-                
-                # EXTRACT EXIF BEFORE SAVING/RESIZING to allow metadata preservation
-                # (This fixes the original data loss bug)
-                exif = img._getexif()
-                if exif:
-                     for tag_id, value in exif.items():
-                        tag = TAGS.get(tag_id, tag_id)
-                        exif_data[tag] = value
-                        if tag == 'GPSInfo':
+            with Image.open(image_path) as img:
+                # OPTIMIZATION: Aggressive Resize for Speed (Moondream/Edge Models)
+                # 1024px is optimal for moondream/llava-Next and significantly faster than 1920px/4K
+                max_dimension = 1024
+                if max(img.size) > max_dimension:
+                    # Calculate new size preserving aspect ratio
+                    ratio = max_dimension / max(img.size)
+                    new_size = (int(img.width * ratio), int(img.height * ratio))
+                    logger.debug(f"  Resizing image {image_path.name} from {img.size} to {new_size} for speed optimization")
+                    
+                    # EXTRACT EXIF BEFORE SAVING/RESIZING to allow metadata preservation
+                    # (This fixes the original data loss bug)
+                    exif = img._getexif()
+                    if exif:
+                         for tag_id, value in exif.items():
+                            tag = TAGS.get(tag_id, tag_id)
+                            exif_data[tag] = value
+                            if tag == 'GPSInfo':
+                                has_geotag = True
+                                gps_info = {}
+                                for gps_tag_id, gps_value in value.items():
+                                    gps_tag = GPSTAGS.get(gps_tag_id, gps_tag_id)
+                                    gps_info[gps_tag] = gps_value
+                                exif_data['GPSDetails'] = gps_info
+                    
+                    # Use LANCZOS for best quality downsampling
+                    img_resized = img.resize(new_size, Image.Resampling.LANCZOS)
+                    
+                    # Overwrite file with optimized version
+                    # Note: We do this AFTER opening, so we might lose some non-standard metadata
+                    # but EXIF is usually preserved if we save correctly, or we extract it first.
+                    
+                    # Now save resized image
+                    img_resized.save(image_path, quality=90, optimize=True)
+                    img_resized.close()
+                else:
+                    # No resize needed, just extract EXIF
+                    exif = img._getexif()
+                    if exif:
+                         for tag_id, value in exif.items():
+                            tag = TAGS.get(tag_id, tag_id)
+                            exif_data[tag] = value
+                            if tag == 'GPSInfo':
+                                has_geotag = True
+                                gps_info = {}
+                                for gps_tag_id, gps_value in value.items():
+                                    gps_tag = GPSTAGS.get(gps_tag_id, gps_tag_id)
+                                    gps_info[gps_tag] = gps_value
+                                exif_data['GPSDetails'] = gps_info
+    
+                if has_geotag:
+                     logger.debug(f"Geotag found in {image_path.name}: GPSInfo present")
+                else:
+                    logger.debug(f"No EXIF geotag found in {image_path.name}")
+                    
+                # Additional check: Try alternative methods to detect GPS data (e.g. XMP/Info)
+                try:
+                    if hasattr(img, 'info'):
+                        info = img.info
+                        if any('gps' in str(k).lower() or 'location' in str(k).lower() for k in info.keys()):
                             has_geotag = True
-                            gps_info = {}
-                            for gps_tag_id, gps_value in value.items():
-                                gps_tag = GPSTAGS.get(gps_tag_id, gps_tag_id)
-                                gps_info[gps_tag] = gps_value
-                            exif_data['GPSDetails'] = gps_info
-                
-                # Use LANCZOS for best quality downsampling
-                img_resized = img.resize(new_size, Image.Resampling.LANCZOS)
-                
-                # Overwrite file with optimized version
-                # Note: We do this AFTER opening, so we might lose some non-standard metadata
-                # but EXIF is usually preserved if we save correctly, or we extract it first.
-                
-                # Now save resized image
-                img_resized.save(image_path, quality=90, optimize=True)
-                
-                # Re-open for any subsequent processing if needed (or just use img_resized)
-                img = img_resized
-            else:
-                # No resize needed, just extract EXIF
-                exif = img._getexif()
-                if exif:
-                     for tag_id, value in exif.items():
-                        tag = TAGS.get(tag_id, tag_id)
-                        exif_data[tag] = value
-                        if tag == 'GPSInfo':
-                            has_geotag = True
-                            gps_info = {}
-                            for gps_tag_id, gps_value in value.items():
-                                gps_tag = GPSTAGS.get(gps_tag_id, gps_tag_id)
-                                gps_info[gps_tag] = gps_value
-                            exif_data['GPSDetails'] = gps_info
-
-            if has_geotag:
-                 logger.debug(f"Geotag found in {image_path.name}: GPSInfo present")
-            else:
-                logger.debug(f"No EXIF geotag found in {image_path.name}")
-                
-            # Additional check: Try alternative methods to detect GPS data (e.g. XMP/Info)
-            try:
-                if hasattr(img, 'info'):
-                    info = img.info
-                    if any('gps' in str(k).lower() or 'location' in str(k).lower() for k in info.keys()):
-                        has_geotag = True
-                        logger.debug(f"Geotag found in {image_path.name} via info dict")
-            except Exception as e:
-                logger.debug(f"Could not check info dict: {e}")
+                            logger.debug(f"Geotag found in {image_path.name} via info dict")
+                except Exception as e:
+                    logger.debug(f"Could not check info dict: {e}")
                 
         except Exception as e:
             logger.warning(f"Error processing image {image_path}: {e}")
