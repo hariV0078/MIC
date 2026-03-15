@@ -1,6 +1,6 @@
 """Duplicate detection with directory-level scanning."""
 import logging
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Tuple
 
 from event_validator.types import ValidationResult, EventSubmission
 from event_validator.config.rules import SIMILARITY_RULES
@@ -14,11 +14,15 @@ logger = logging.getLogger(__name__)
 # Global in-memory hash tracker for current batch
 _batch_hash_tracker: Dict[str, Dict[str, Any]] = {}
 
+# Global in-memory title tracker for current batch: (user_id, normalized_title) -> submission_id
+_batch_title_tracker: Dict[Tuple[str, str], str] = {}
+
 
 def reset_batch_hash_tracker():
-    """Reset the batch hash tracker (call at start of new batch)."""
-    global _batch_hash_tracker
+    """Reset the batch hash and title trackers (call at start of new batch)."""
+    global _batch_hash_tracker, _batch_title_tracker
     _batch_hash_tracker = {}
+    _batch_title_tracker = {}
 
 
 def validate_duplicate_detection(
@@ -222,5 +226,75 @@ def validate_duplicates(
         submission_id: Unique identifier for this submission
     """
     results = []
-    results.append(validate_duplicate_detection(submission, config, submission_id))
+
+    img_result = validate_duplicate_detection(submission, config, submission_id)
+    if not img_result.passed:
+        img_result.points_awarded = -10.0
+    results.append(img_result)
+
+    results.append(validate_duplicate_title(submission, config, submission_id))
     return results
+
+
+def normalize_title(title: str) -> str:
+    """Normalize title for duplicate checking (lowercase, strip, remove special chars)."""
+    if not title:
+        return ""
+    import re
+
+    cleaned = re.sub(r'[^a-z0-9]', '', title.lower())
+    return cleaned
+
+
+def validate_duplicate_title(
+    submission: EventSubmission,
+    config: ValidationConfig,
+    submission_id: Optional[str] = None
+) -> ValidationResult:
+    """Check if the same user has submitted the same activity name."""
+    global _batch_title_tracker
+
+    rule_name, points = SIMILARITY_RULES[1]
+    original_data = getattr(submission, '_original_row_data', submission.row_data)
+
+    user_id = str(original_data.get('created_by', ''))
+    if not user_id or user_id == 'nan':
+        user_id = str(original_data.get('user_id', ''))
+
+    activity_name = str(original_data.get('activity_name', ''))
+
+    if not user_id or user_id == 'nan' or not activity_name or activity_name == 'nan':
+        return ValidationResult(
+            criterion=rule_name,
+            passed=True,
+            points_awarded=float(points),
+            message="Skipped: Missing user_id or activity_name"
+        )
+
+    normalized = normalize_title(activity_name)
+    tracker_key = (user_id, normalized)
+
+    if tracker_key in _batch_title_tracker:
+        previous_id = _batch_title_tracker[tracker_key]
+        if previous_id == submission_id:
+            return ValidationResult(
+                criterion=rule_name,
+                passed=True,
+                points_awarded=float(points),
+                message=""
+            )
+
+        return ValidationResult(
+            criterion=rule_name,
+            passed=False,
+            points_awarded=-10.0,
+            message=f"Duplicate title for same user (matches {previous_id})"
+        )
+
+    _batch_title_tracker[tracker_key] = submission_id or "unknown"
+    return ValidationResult(
+        criterion=rule_name,
+        passed=True,
+        points_awarded=float(points),
+        message=""
+    )

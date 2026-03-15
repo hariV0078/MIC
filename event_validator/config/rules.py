@@ -4,33 +4,30 @@ from typing import Dict, List, Tuple
 
 # Theme Validation - 40 points total
 THEME_RULES: List[Tuple[str, int]] = [
-    ("Title/Objectives/Learning align to theme", 10),
-    ("Level matches duration", 11),
-    ("Participants reported > 15", 12),
-    ("Year alignment (financial vs academic)", 7),
+    ("Title matches theme", 20),
+    ("Level matches duration", 10),
+    ("Participants reported > 15", 10),
 ]
 
-# PDF Test - 25 points total
+# PDF Test - 20 points total
 PDF_RULES: List[Tuple[str, int]] = [
     ("PDF title matches metadata", 7),
     ("Expert details present", 7),
-    ("Learning outcomes align", 3),
-    ("Objectives match", 3),
-    ("Participant info matches", 5),
+    ("Objectives and learning align", 6),
 ]
 
 # Image Test - 20 points total
 IMAGE_RULES: List[Tuple[str, int]] = [
-    ("GeoTag present", 6),
-    ("Banner/Poster visible", 2),
-    ("Event scene is real activity", 3),
-    ("Event mode matches (online/offline)", 5),
-    ("15+ participants visible", 4),
+    ("GeoTag present", 5),
+    ("Banner/Poster visible", 5),
+    ("Event scene is real activity", 5),
+    ("15+ participants visible", 5),
 ]
 
-# Similarity Test - 15 points total
+# Similarity/Duplicate Test - 20 points total
 SIMILARITY_RULES: List[Tuple[str, int]] = [
-    ("Duplicate photo detection (filesystem)", 15),
+    ("Duplicate image check", 10),
+    ("Duplicate title check", 10),
 ]
 
 # Total points: 100

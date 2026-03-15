@@ -32,24 +32,21 @@ def _get_score_column_name(criterion: str) -> str:
     # Map rule names to column names (camelCase format)
     column_mapping = {
         # Theme rules
-        "Title/Objectives/Learning align to theme": "themeAlignmentScore",
+        "Title matches theme": "themeAlignmentScore",
         "Level matches duration": "levelDurationScore",
-        "Participants reported > 15": "participantsReportedScore",
-        "Year alignment (financial vs academic)": "yearAlignmentScore",
+        "Participants reported > 15": "themeParticipantsScore",
         # PDF rules
         "PDF title matches metadata": "pdfTitleScore",
         "Expert details present": "pdfExpertScore",
-        "Learning outcomes align": "pdfLearningScore",
-        "Objectives match": "pdfObjectivesScore",
-        "Participant info matches": "pdfParticipantScore",
+        "Objectives and learning align": "pdfAlignmentScore",
         # Image rules
         "GeoTag present": "imgGeotagScore",
         "Banner/Poster visible": "imgBannerScore",
         "Event scene is real activity": "imgRealActivityScore",
-        "Event mode matches (online/offline)": "imgModeScore",
         "15+ participants visible": "imgParticipantsScore",
         # Similarity rules
-        "Duplicate photo detection (filesystem)": "duplicateScore",
+        "Duplicate image check": "duplicateImageScore",
+        "Duplicate title check": "duplicateTitleScore",
     }
     return column_mapping.get(criterion, criterion.replace(" ", "").replace("/", "") + "Score")
 
@@ -66,10 +63,10 @@ def _add_score_breakdown_to_row(enriched_row: dict, all_results: List[Validation
     
     # Initialize all score columns first (set to "0/0" if no result)
     all_score_columns = [
-        'themeAlignmentScore', 'levelDurationScore', 'participantsReportedScore', 'yearAlignmentScore',
-        'pdfTitleScore', 'pdfExpertScore', 'pdfLearningScore', 'pdfObjectivesScore', 'pdfParticipantScore',
-        'imgGeotagScore', 'imgBannerScore', 'imgRealActivityScore', 'imgModeScore', 'imgParticipantsScore',
-        'duplicateScore'
+        'themeAlignmentScore', 'levelDurationScore', 'themeParticipantsScore',
+        'pdfTitleScore', 'pdfExpertScore', 'pdfAlignmentScore',
+        'imgGeotagScore', 'imgBannerScore', 'imgRealActivityScore', 'imgParticipantsScore',
+        'duplicateImageScore', 'duplicateTitleScore'
     ]
     for col in all_score_columns:
         if col not in enriched_row:
@@ -194,8 +191,10 @@ def process_submission(
             if temp_pdf_path:
                 logger.info(f"Extracting PDF from downloaded file: {temp_pdf_path}")
                 submission.pdf_data = extract_pdf_text(temp_pdf_path)
-                if submission.pdf_data:  # PDF successfully extracted
-                    pdf_missing = False
+                # PDF is present once downloaded, even if text extraction returns empty
+                pdf_missing = False
+                if not submission.pdf_data or not submission.pdf_data.text.strip():
+                    logger.warning(f"PDF downloaded but no text extracted (may be scanned/image PDF): {temp_pdf_path}")
                 # Note: PDF file is saved in current directory (downloaded_files/)
                 # It is kept for potential future use and can be cleaned up manually if needed
             else:
@@ -205,8 +204,10 @@ def process_submission(
             if pdf_path.exists():
                 logger.info(f"Extracting PDF: {pdf_path}")
                 submission.pdf_data = extract_pdf_text(pdf_path)
-                if submission.pdf_data:  # PDF successfully extracted
-                    pdf_missing = False
+                # PDF is present once found, even if text extraction returns empty
+                pdf_missing = False
+                if not submission.pdf_data or not submission.pdf_data.text.strip():
+                    logger.warning(f"PDF found but no text extracted (may be scanned/image PDF): {pdf_path}")
             else:
                 logger.warning(f"PDF file not found: {pdf_path}")
     else:
@@ -304,7 +305,7 @@ def process_submission(
     
     # Theme validation
     logger.info("─" * 80)
-    logger.info("THEME VALIDATION (33 points total - Year alignment disabled)")
+    logger.info("THEME VALIDATION (40 points total)")
     logger.info("─" * 80)
     
     # Check budget before theme validation (1 API call)
@@ -329,18 +330,42 @@ def process_submission(
     theme_points = sum(r.points_awarded for r in theme_results)
     theme_passed = sum(1 for r in theme_results if r.passed)
     theme_total = len(theme_results)
-    logger.info(f"Theme Validation Summary: {theme_passed}/{theme_total} passed | Points: {theme_points}/33 (Year alignment disabled)")
+    logger.info(f"Theme Validation Summary: {theme_passed}/{theme_total} passed | Points: {theme_points}/40")
     for result in theme_results:
         status = "✓ PASS" if result.passed else "✗ FAIL"
         logger.info(f"  [{status}] {result.criterion}: {result.points_awarded} points | {result.message or 'OK'}")
     
     # Removed delay - parallel processing handles rate limiting better
     
+    # Check if event_driven=3 and theme alignment failed - skip PDF validation
+    theme_alignment_failed = False
+    if theme_results:
+        first_theme_result = theme_results[0]
+        if not first_theme_result.passed:
+            theme_alignment_failed = True
+
     # PDF validation
     logger.info("─" * 80)
-    logger.info("PDF VALIDATION (25 points total)")
+    logger.info("PDF VALIDATION (20 points total)")
     logger.info("─" * 80)
-    if submission.pdf_data:
+    if event_driven == 3 and theme_alignment_failed:
+        logger.warning("EVENT_DRIVEN=3: Theme alignment failed - skipping ALL PDF validations (awarding 0 points)")
+        from event_validator.config.rules import PDF_RULES
+        pdf_results = []
+        for rule_name, points in PDF_RULES:
+            pdf_results.append(ValidationResult(
+                criterion=rule_name,
+                passed=False,
+                points_awarded=0.0,
+                message="Event driven 3: Theme alignment failed - PDF validation skipped"
+            ))
+        all_results.extend(pdf_results)
+        pdf_points = 0.0
+        pdf_total = len(PDF_RULES)
+        logger.info(f"PDF Validation Summary: 0/{pdf_total} passed | Points: 0.0/20 (skipped due to theme mismatch)")
+        for result in pdf_results:
+            logger.info(f"  [✗ SKIP] {result.criterion}: 0.0 points | {result.message}")
+    elif submission.pdf_data:
         # Check budget before PDF validation (1 API call)
         if not budget.can_make_call("pdf_validation"):
             logger.warning(f"Budget exhausted before PDF validation. Skipping API call.")
@@ -364,7 +389,7 @@ def process_submission(
         pdf_points = sum(r.points_awarded for r in pdf_results)
         pdf_passed = sum(1 for r in pdf_results if r.passed)
         pdf_total = len(pdf_results)
-        logger.info(f"PDF Validation Summary: {pdf_passed}/{pdf_total} passed | Points: {pdf_points}/25")
+        logger.info(f"PDF Validation Summary: {pdf_passed}/{pdf_total} passed | Points: {pdf_points}/20")
         for result in pdf_results:
             status = "✓ PASS" if result.passed else "✗ FAIL"
             logger.info(f"  [{status}] {result.criterion}: {result.points_awarded} points | {result.message or 'OK'}")
@@ -385,7 +410,7 @@ def process_submission(
         all_results.extend(pdf_results)
         pdf_points = 0
         pdf_total = len(PDF_RULES)
-        logger.info(f"PDF Validation Summary: 0/{pdf_total} passed | Points: {pdf_points}/25 (PDF missing or unreadable)")
+        logger.info(f"PDF Validation Summary: 0/{pdf_total} passed | Points: {pdf_points}/20 (PDF missing or unreadable)")
         logger.info(f"  [✗ FAIL] PDF Validation: 0 points | PDF file missing or could not be downloaded")
     
     # ═══════════════════════════════════════════════════════════════
@@ -485,7 +510,7 @@ def process_submission(
     
     # Duplicate validation (within batch)
     logger.info("─" * 80)
-    logger.info("DUPLICATE VALIDATION (15 points total)")
+    logger.info("DUPLICATE VALIDATION (20 points total)")
     logger.info("─" * 80)
     
     if submission.kill_switch:
@@ -508,7 +533,7 @@ def process_submission(
     duplicate_points = sum(r.points_awarded for r in duplicate_results)
     duplicate_passed = sum(1 for r in duplicate_results if r.passed)
     duplicate_total = len(duplicate_results)
-    logger.info(f"Duplicate Validation Summary: {duplicate_passed}/{duplicate_total} passed | Points: {duplicate_points}/15")
+    logger.info(f"Duplicate Validation Summary: {duplicate_passed}/{duplicate_total} passed | Points: {duplicate_points}/20")
     for result in duplicate_results:
         status = "✓ PASS" if result.passed else "✗ FAIL"
         logger.info(f"  [{status}] {result.criterion}: {result.points_awarded} points | {result.message or 'OK'}")
@@ -525,12 +550,12 @@ def process_submission(
     total_rules = len(all_results)
     logger.info(f"Total Rules: {total_rules} | Passed: {total_passed} | Failed: {total_rules - total_passed}")
     logger.info(f"Score Breakdown:")
-    logger.info(f"  Theme:    {theme_points}/33 (Year alignment disabled)")
-    logger.info(f"  PDF:      {pdf_points}/25")
+    logger.info(f"  Theme:    {theme_points}/40")
+    logger.info(f"  PDF:      {pdf_points}/20")
     logger.info(f"  Image:    {image_points}/20")
-    logger.info(f"  Duplicate: {duplicate_points}/15")
+    logger.info(f"  Duplicate: {duplicate_points}/20")
     logger.info(f"  ─────────────────────")
-    logger.info(f"  TOTAL:    {total_points}/93 (max possible - Year alignment disabled)")
+    logger.info(f"  TOTAL:    {total_points}/100 (max possible)")
     
     # Determine status
     threshold = config.acceptance_threshold or ACCEPTANCE_THRESHOLD
@@ -801,10 +826,10 @@ def process_csv(
             enriched_row['Requirements Not Met'] = f"Processing error: {str(e)}"
             # Initialize empty score columns for error cases
             score_columns = [
-                'themeAlignmentScore', 'levelDurationScore', 'participantsReportedScore', 'yearAlignmentScore',
-                'pdfTitleScore', 'pdfExpertScore', 'pdfLearningScore', 'pdfObjectivesScore', 'pdfParticipantScore',
-                'imgGeotagScore', 'imgBannerScore', 'imgRealActivityScore', 'imgModeScore', 'imgParticipantsScore',
-                'duplicateScore'
+                'themeAlignmentScore', 'levelDurationScore', 'themeParticipantsScore',
+                'pdfTitleScore', 'pdfExpertScore', 'pdfAlignmentScore',
+                'imgGeotagScore', 'imgBannerScore', 'imgRealActivityScore', 'imgParticipantsScore',
+                'duplicateImageScore', 'duplicateTitleScore'
             ]
             for col in score_columns:
                 enriched_row[col] = "0/0"
@@ -837,10 +862,10 @@ def process_csv(
                 error_row['Requirements Not Met'] = f"Unexpected error: {str(e)}"
                 # Initialize empty score columns for error cases
                 score_columns = [
-                    'themeAlignmentScore', 'levelDurationScore', 'participantsReportedScore', 'yearAlignmentScore',
-                    'pdfTitleScore', 'pdfExpertScore', 'pdfLearningScore', 'pdfObjectivesScore', 'pdfParticipantScore',
-                    'imgGeotagScore', 'imgBannerScore', 'imgRealActivityScore', 'imgModeScore', 'imgParticipantsScore',
-                    'duplicateScore'
+                    'themeAlignmentScore', 'levelDurationScore', 'themeParticipantsScore',
+                    'pdfTitleScore', 'pdfExpertScore', 'pdfAlignmentScore',
+                    'imgGeotagScore', 'imgBannerScore', 'imgRealActivityScore', 'imgParticipantsScore',
+                    'duplicateImageScore', 'duplicateTitleScore'
                 ]
                 for col in score_columns:
                     error_row[col] = "0/0"
@@ -853,10 +878,10 @@ def process_csv(
     # Ensure required fields are always present
     # Add score breakdown columns
     score_columns = [
-        'themeAlignmentScore', 'levelDurationScore', 'participantsReportedScore', 'yearAlignmentScore',
-        'pdfTitleScore', 'pdfExpertScore', 'pdfLearningScore', 'pdfObjectivesScore', 'pdfParticipantScore',
-        'imgGeotagScore', 'imgBannerScore', 'imgRealActivityScore', 'imgModeScore', 'imgParticipantsScore',
-        'duplicateScore'
+        'themeAlignmentScore', 'levelDurationScore', 'themeParticipantsScore',
+        'pdfTitleScore', 'pdfExpertScore', 'pdfAlignmentScore',
+        'imgGeotagScore', 'imgBannerScore', 'imgRealActivityScore', 'imgParticipantsScore',
+        'duplicateImageScore', 'duplicateTitleScore'
     ]
     output_fieldnames = list(fieldnames) + ['Overall Score', 'Status', 'Requirements Not Met'] + score_columns
     

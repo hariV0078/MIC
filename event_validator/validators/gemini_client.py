@@ -57,9 +57,14 @@ class GeminiClient:
     def __init__(self, api_key: Optional[str] = None, groq_api_key: Optional[str] = None):
         """Initialize Gemini client with optimal models. Falls back to Groq if Gemini fails."""
         # Initialize model names first (always set, even if client fails)
-        # Using gemini-1.5-flash for maximum speed and higher RPM (Free tier: 15 RPM)
-        self.text_model = "gemini-1.5-flash"
-        self.vision_model = "gemini-1.5-flash"
+        # Fallback chain: flash → flash-lite → pro → Groq
+        self.text_model = "gemini-2.5-flash"
+        self.vision_model = "gemini-2.5-flash"
+        # Ordered fallback list: [(text_model, vision_model, max_retries), ...]
+        self.gemini_fallbacks = [
+            ("gemini-2.5-flash-lite", "gemini-2.5-flash-lite", 2),  # Fallback 1: cheapest/fastest
+            ("gemini-2.5-pro", "gemini-2.5-pro", 1),                # Fallback 2: most capable
+        ]
         
         self.api_key = api_key or os.getenv("GEMINI_API_KEY")
         
@@ -73,7 +78,7 @@ class GeminiClient:
         else:
             try:
                 self.client = genai.Client(api_key=self.api_key)
-                logger.info(f"Gemini client initialized. Text model: {self.text_model}, Vision model: {self.vision_model}")
+                logger.info(f"Gemini client initialized. Primary: {self.text_model}, Fallbacks: {[f[0] for f in self.gemini_fallbacks]}")
             except Exception as e:
                 logger.error(f"Failed to initialize Gemini client: {e}")
                 self.client = None
@@ -97,6 +102,18 @@ class GeminiClient:
         else:
             logger.debug("Groq package not available for fallback")
     
+    def _get_next_gemini_fallback(self, fallback_level: int, image_path: Optional[Path] = None):
+        """Get the next fallback Gemini model and its retry count.
+
+        Returns:
+            (model_name, max_retries, next_level) or (None, 0, level) if no more fallbacks.
+        """
+        if fallback_level < len(self.gemini_fallbacks):
+            text_model, vision_model, max_retries = self.gemini_fallbacks[fallback_level]
+            model = vision_model if image_path else text_model
+            return model, max_retries, fallback_level + 1
+        return None, 0, fallback_level + 1
+
     def _get_cache_key(self, prompt: str, model: Optional[str] = None, image_hash: Optional[str] = None, pdf_hash: Optional[str] = None) -> str:
         """Generate cache key for prompt, model, and optionally image/pdf hash."""
         content = f"{model or self.text_model}:{prompt}"
@@ -112,19 +129,21 @@ class GeminiClient:
         model: Optional[str] = None,
         image_path: Optional[Path] = None,
         max_retries: int = 3,
-        use_cache: bool = True
+        use_cache: bool = True,
+        _fallback_level: int = 0
     ) -> Optional[str]:
         """
         Call Gemini API with retry logic, rate limit handling, and caching.
-        Falls back to Groq ONLY as last resort after all Gemini retries fail.
-        
+        Fallback chain: gemini-2.5-flash → gemini-2.5-flash-lite → gemini-2.5-pro → Groq.
+
         Args:
             prompt: Prompt text
             model: Model name (defaults to text_model for text, vision_model for images)
             image_path: Optional path to image file for vision tasks
             max_retries: Maximum retry attempts
             use_cache: Whether to use response cache
-        
+            _fallback_level: Internal counter tracking which Gemini fallback to try next
+
         Returns:
             Response text or None if failed
         """
@@ -180,7 +199,17 @@ class GeminiClient:
         circuit_breaker = get_gemini_circuit_breaker()
         if not circuit_breaker.can_proceed():
             logger.warning("Circuit breaker OPEN: Gemini API temporarily unavailable")
-            # Try Groq fallback if available
+            # Try next Gemini fallback model
+            fallback_model, fb_retries, next_level = self._get_next_gemini_fallback(_fallback_level, image_path)
+            if fallback_model and self.client:
+                logger.info(f"Trying Gemini fallback model {fallback_model} due to circuit breaker")
+                fallback_result = self._call_gemini(
+                    prompt, model=fallback_model, image_path=image_path,
+                    max_retries=fb_retries, use_cache=use_cache, _fallback_level=next_level
+                )
+                if fallback_result:
+                    return fallback_result
+            # Try Groq as last resort
             if self.groq_client and hasattr(self.groq_client, '_call_groq') and not image_path:
                 logger.info("Attempting Groq fallback due to Gemini circuit breaker")
                 groq_response = self.groq_client._call_groq(prompt, use_cache=use_cache)
@@ -203,7 +232,17 @@ class GeminiClient:
             # CIRCUIT-AWARE RETRY: Check circuit breaker before each retry attempt
             if attempt > 0 and not circuit_breaker.can_proceed():
                 logger.warning(f"Circuit breaker OPEN during retry - aborting Gemini retries")
-                # Try Groq fallback immediately instead of retrying
+                # Try next Gemini fallback model
+                fallback_model, fb_retries, next_level = self._get_next_gemini_fallback(_fallback_level, image_path)
+                if fallback_model and self.client:
+                    logger.info(f"Trying Gemini fallback model {fallback_model} (mid-retry circuit break)")
+                    fallback_result = self._call_gemini(
+                        prompt, model=fallback_model, image_path=image_path,
+                        max_retries=fb_retries, use_cache=use_cache, _fallback_level=next_level
+                    )
+                    if fallback_result:
+                        return fallback_result
+                # Try Groq as last resort
                 if self.groq_client and hasattr(self.groq_client, '_call_groq') and not image_path:
                     logger.info("Attempting Groq fallback due to circuit breaker (mid-retry)")
                     groq_response = self.groq_client._call_groq(prompt, use_cache=use_cache)
@@ -288,6 +327,17 @@ class GeminiClient:
                     # CIRCUIT-AWARE: If circuit just opened, don't retry - fallback immediately
                     if not circuit_breaker.can_proceed():
                         logger.warning("Circuit breaker OPEN after 429 - skipping retries, falling back")
+                        # Try next Gemini fallback model
+                        fallback_model, fb_retries, next_level = self._get_next_gemini_fallback(_fallback_level, image_path)
+                        if fallback_model and self.client:
+                            logger.info(f"Trying Gemini fallback model {fallback_model} after 429 circuit break")
+                            fallback_result = self._call_gemini(
+                                prompt, model=fallback_model, image_path=image_path,
+                                max_retries=fb_retries, use_cache=use_cache, _fallback_level=next_level
+                            )
+                            if fallback_result:
+                                return fallback_result
+                        # Try Groq as last resort
                         if self.groq_client and hasattr(self.groq_client, '_call_groq') and not image_path:
                             groq_response = self.groq_client._call_groq(prompt, use_cache=use_cache)
                             if groq_response:
@@ -328,13 +378,31 @@ class GeminiClient:
                     # Small delay before retry for non-rate-limit errors
                     time.sleep(1)
                 
-                # Only try Groq as LAST RESORT after all Gemini retries fail
+                # Only try fallbacks after all retries for current model fail
                 if attempt == max_retries - 1:
-                    logger.warning("All Gemini API retry attempts failed, trying Groq as last resort...")
-                    # Fallback to Groq ONLY if Gemini completely fails
+                    # Step 1: Try next Gemini fallback model
+                    fallback_model, fb_retries, next_level = self._get_next_gemini_fallback(_fallback_level, image_path)
+                    if fallback_model and self.client:
+                        logger.warning(
+                            f"Gemini model {model} failed after {max_retries} retries. "
+                            f"Trying fallback Gemini model: {fallback_model}"
+                        )
+                        fallback_result = self._call_gemini(
+                            prompt,
+                            model=fallback_model,
+                            image_path=image_path,
+                            max_retries=fb_retries,
+                            use_cache=use_cache,
+                            _fallback_level=next_level
+                        )
+                        if fallback_result:
+                            return fallback_result
+                        logger.warning(f"Gemini fallback model {fallback_model} also failed")
+
+                    # Step 2: Try Groq as last resort
+                    logger.warning("All Gemini models failed, trying Groq as last resort...")
                     if self.groq_client and hasattr(self.groq_client, 'client') and self.groq_client.client:
                         logger.info("Falling back to Groq API as last resort")
-                        # For image analysis, Groq uses a different approach (text-based for now)
                         if image_path:
                             logger.warning("Groq fallback for image analysis may have limited capabilities")
                             try:
@@ -345,7 +413,6 @@ class GeminiClient:
                             except Exception as e:
                                 logger.warning(f"Groq fallback for image analysis failed: {e}")
                         else:
-                            # Text-based call with Groq
                             try:
                                 groq_response = self.groq_client._call_groq(prompt, model=self.groq_client.text_model, use_cache=use_cache)
                                 if groq_response:
@@ -353,12 +420,12 @@ class GeminiClient:
                                     return groq_response
                             except Exception as e:
                                 logger.warning(f"Groq fallback for text call failed: {e}")
-                    
-                    logger.error("Both Gemini and Groq API calls failed")
+
+                    logger.error("All API calls failed (Gemini primary + fallbacks + Groq)")
                     return None
-        
+
         return None
-    
+
     def _extract_retry_delay(self, error_str: str) -> Optional[float]:
         """Extract retry delay from error message."""
         # Look for patterns like "retry_delay { seconds: 49 }" or "retry in 49.42s"

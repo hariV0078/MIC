@@ -244,13 +244,13 @@ def validate_participants_reported(
     submission: EventSubmission,
     gemini_client: Optional[GeminiClient] = None
 ) -> ValidationResult:
-    """Check participants with graduated scoring scale."""
-    rule_name, max_points = THEME_RULES[2]  # max_points = 12
+    """Check participants > 15."""
+    rule_name, points = THEME_RULES[2]
     
     row_data = submission.row_data
     participants_str = str(row_data.get('Participants', '0')).strip()
     
-    logger.info(f"Checking: {rule_name} ({max_points} points)")
+    logger.info(f"Checking: {rule_name} ({points} points)")
     
     try:
         participants = int(float(participants_str))
@@ -259,39 +259,10 @@ def validate_participants_reported(
     
     logger.debug(f"  Participants: {participants}")
     
-    # Graduated scoring scale:
-    # >= 20: 12 points (full score)
-    # 19: 11.4 points
-    # 18: 10.8 points
-    # 17: 10.2 points
-    # 16: 9.6 points
-    # 15: 9 points
-    # < 15: 0 points (reject)
-    
-    if participants >= 20:
-        points_awarded = 12.0
+    if participants >= 15:
+        points_awarded = float(points)
         passed = True
-        logger.info(f"  PASS: {participants} participants reported (>= 20) | Points: {points_awarded}")
-    elif participants == 19:
-        points_awarded = 11.4
-        passed = True
-        logger.info(f"  PASS: {participants} participants reported | Points: {points_awarded}")
-    elif participants == 18:
-        points_awarded = 10.8
-        passed = True
-        logger.info(f"  PASS: {participants} participants reported | Points: {points_awarded}")
-    elif participants == 17:
-        points_awarded = 10.2
-        passed = True
-        logger.info(f"  PASS: {participants} participants reported | Points: {points_awarded}")
-    elif participants == 16:
-        points_awarded = 9.6
-        passed = True
-        logger.info(f"  PASS: {participants} participants reported | Points: {points_awarded}")
-    elif participants == 15:
-        points_awarded = 9.0
-        passed = True
-        logger.info(f"  PASS: {participants} participants reported | Points: {points_awarded}")
+        logger.info(f"  PASS: {participants} participants reported (>= 15) | Points: {points_awarded}")
     else:
         points_awarded = 0.0
         passed = False
@@ -310,7 +281,8 @@ def validate_year_alignment(
     gemini_client: Optional[GeminiClient] = None
 ) -> ValidationResult:
     """Check year alignment (financial vs academic)."""
-    rule_name, points = THEME_RULES[3]
+    rule_name = "Year alignment (financial vs academic)"
+    points = 0
     
     logger.info(f"Checking: {rule_name} ({points} points)")
     
