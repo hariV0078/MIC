@@ -831,7 +831,7 @@ REASONING: <brief explanation of your findings>"""
             {{
                 "has_banner": true,
                 "is_real_event": true,
-                "has_15_plus_participants": true,  // Should be >= {expected_participants or 15}
+                "has_15_plus_participants": true,  // Should be >= 15
                 "mode_match": true,
                 "description": "short description"
             }}"""
